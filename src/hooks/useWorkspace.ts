@@ -9,83 +9,54 @@ import {
   saveProjectFile,
   searchProjectFiles,
 } from "../services/projects";
+import { loadSession, saveSession } from "../services/session";
 import type { FileBuffer, ProjectNode, SearchMatch } from "../types/project";
+import type { SessionState } from "../types/session";
+import {
+  buildSessionState,
+  findNodeByPath,
+  isSamePathOrInside,
+  nextActiveIndex,
+  parentOf,
+  removeBuffersInside,
+  removeCursorsInside,
+  rekeyBuffers,
+  rekeyCursors,
+  rekeyTabs,
+  restoredActiveIndex,
+  restorableTabs,
+  tabsInside,
+  withoutKey,
+  type Buffers,
+  type CursorMap,
+  type CursorPosition,
+  type OpenTab,
+} from "../workspace/state";
 import { messageOf, type ProjectState } from "./useProject";
 
-type Buffers = Record<string, FileBuffer>;
+export type { OpenTab } from "../workspace/state";
 
-function isSamePathOrInside(path: string, parent: string): boolean {
-  return path === parent || path.startsWith(parent + "\\") || path.startsWith(parent + "/");
-}
+/** Cuantas pestañas se recuperan de la sesión. Evita restaurar una lista absurda. */
+const MAX_RESTORED_TABS = 30;
 
-function parentOf(path: string): string {
-  const index = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
-  return index === -1 ? "" : path.slice(0, index);
-}
-
-function rekey(buffers: Buffers, oldPath: string, newPath: string, newName: string): Buffers {
-  const result: Buffers = {};
-
-  for (const [key, buffer] of Object.entries(buffers)) {
-    if (isSamePathOrInside(key, oldPath)) {
-      result[newPath + key.slice(oldPath.length)] =
-        key === oldPath ? { ...buffer, name: newName } : buffer;
-    } else {
-      result[key] = buffer;
-    }
-  }
-
-  return result;
-}
-
-function removeKey(buffers: Buffers, path: string): Buffers {
-  const result: Buffers = {};
-
-  for (const [key, buffer] of Object.entries(buffers)) {
-    if (!isSamePathOrInside(key, path)) {
-      result[key] = buffer;
-    }
-  }
-
-  return result;
-}
-
-export function findNodeByPath(node: ProjectNode, path: string): ProjectNode | null {
-  if (node.path === path) {
-    return node;
-  }
-
-  for (const child of node.children) {
-    const found = findNodeByPath(child, path);
-    if (found !== null) {
-      return found;
-    }
-  }
-
-  return null;
-}
-
-export function flattenFiles(node: ProjectNode, out: ProjectNode[] = []): ProjectNode[] {
-  for (const child of node.children) {
-    if (child.kind === "folder") {
-      flattenFiles(child, out);
-    } else {
-      out.push(child);
-    }
-  }
-
-  return out;
-}
+/** Espera antes de escribir la sesión en disco, para no escribir en cada pulsación. */
+const SESSION_SAVE_DELAY = 500;
 
 /** Estado del editor y operaciones sobre los archivos del proyecto abierto. */
 export function useWorkspace(projectState: ProjectState) {
   const { project, applyTree } = projectState;
+  const projectPath = project?.path ?? null;
 
   const [buffers, setBuffers] = useState<Buffers>({});
-  const [activePath, setActivePath] = useState<string | null>(null);
+  const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
+  const [activeTabIndex, setActiveTabIndex] = useState<number>(-1);
+  const [cursors, setCursors] = useState<CursorMap>({});
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [isLoadingFile, setIsLoadingFile] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const activePath = openTabs[activeTabIndex]?.path ?? null;
+
   const [reveal, setReveal] = useState<{ path: string; line: number } | null>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchMatch[]>([]);
@@ -105,80 +76,143 @@ export function useWorkspace(projectState: ProjectState) {
     setError(null);
   }, []);
 
-  // Referencias para que los manejadores no dependan del estado y puedan memoizarse.
+  /*
+   * Las pestañas y el índice activo se guardan además en referencias. Las
+   * operaciones llegan desde manejadores de eventos y esperas, donde el estado
+   * del render que creó la función puede ya estar obsoleto.
+   */
   const projectRef = useRef(project);
   const buffersRef = useRef(buffers);
-  const activePathRef = useRef(activePath);
+  const tabsRef = useRef(openTabs);
+  const indexRef = useRef(activeTabIndex);
+
+  const writeTabs = useCallback((tabs: OpenTab[]) => {
+    tabsRef.current = tabs;
+    setOpenTabs(tabs);
+  }, []);
+
+  const writeIndex = useCallback((index: number) => {
+    indexRef.current = index;
+    setActiveTabIndex(index);
+  }, []);
+
+  const writeBuffers = useCallback((buffers: Buffers) => {
+    buffersRef.current = buffers;
+    setBuffers(buffers);
+  }, []);
 
   useEffect(() => {
     projectRef.current = project;
   }, [project]);
 
-  useEffect(() => {
-    buffersRef.current = buffers;
-  }, [buffers]);
+  const selectFile = useCallback(
+    async (path: string, revealLine?: number) => {
+      const current = projectRef.current;
 
-  useEffect(() => {
-    activePathRef.current = activePath;
-  }, [activePath]);
+      if (current === null) {
+        return;
+      }
 
-  const selectFile = useCallback(async (path: string, revealLine?: number) => {
-    const current = projectRef.current;
+      clearError();
 
-    if (current === null) {
-      return;
-    }
+      if (revealLine !== undefined) {
+        setReveal({ path, line: revealLine });
+      }
 
-    clearError();
+      // Si ya está abierto, solo se activa su pestaña.
+      const existing = tabsRef.current.findIndex((tab) => tab.path === path);
 
-    if (revealLine !== undefined) {
-      setReveal({ path, line: revealLine });
-    }
+      if (existing >= 0) {
+        writeIndex(existing);
+        return;
+      }
 
-    if (buffersRef.current[path] !== undefined) {
-      setActivePath(path);
-      return;
-    }
+      setIsLoadingFile(true);
 
-    setIsLoadingFile(true);
+      try {
+        const file = await readProjectFile(path, current.path);
 
-    try {
-      const file = await readProjectFile(path, current.path);
-
-      // Se indexa por la ruta del arbol, no por la que devuelve Rust: en Windows
-      // Rust entrega rutas canonicalizadas y no coincidirian con las del arbol.
-      setBuffers((buffersNow) => ({
-        ...buffersNow,
-        [path]: {
+        // Se indexa por la ruta del arbol, no por la que devuelve Rust: en Windows
+        // Rust entrega rutas canonicalizadas y no coincidirian con las del arbol.
+        const buffer: FileBuffer = {
           name: file.name,
           language: file.language,
           content: file.content,
           savedContent: file.content,
-        },
-      }));
-      setActivePath(path);
-    } catch (cause) {
-      reportError(messageOf(cause, "No se pudo abrir el archivo."));
-    } finally {
-      setIsLoadingFile(false);
-    }
-  }, [clearError, reportError]);
+        };
 
-  const updateContent = useCallback((content: string) => {
-    const path = activePathRef.current;
+        const tab: OpenTab = { path, name: file.name, language: file.language };
 
-    if (path === null) {
-      return;
-    }
+        // Mientras se leía el archivo puede haberse abierto otro: se vuelve a mirar.
+        const tabsNow = tabsRef.current;
+        const alreadyOpen = tabsNow.findIndex((item) => item.path === path);
 
-    setBuffers((current) => {
-      const buffer = current[path];
+        if (alreadyOpen >= 0) {
+          writeIndex(alreadyOpen);
+          return;
+        }
 
-      if (buffer === undefined) {
+        writeBuffers({ ...buffersRef.current, [path]: buffer });
+
+        const next = [...tabsNow, tab];
+        writeTabs(next);
+        writeIndex(next.length - 1);
+      } catch (cause) {
+        reportError(messageOf(cause, "No se pudo abrir el archivo."));
+      } finally {
+        setIsLoadingFile(false);
+      }
+    },
+    [clearError, reportError, writeBuffers, writeIndex, writeTabs],
+  );
+
+  const selectTab = useCallback(
+    (index: number) => {
+      if (index < 0 || index >= tabsRef.current.length || index === indexRef.current) {
+        return;
+      }
+
+      writeIndex(index);
+    },
+    [writeIndex],
+  );
+
+  const updateContent = useCallback(
+    (content: string) => {
+      const path = tabsRef.current[indexRef.current]?.path ?? null;
+
+      if (path === null) {
+        return;
+      }
+
+      setBuffers((current) => {
+        const buffer = current[path];
+
+        if (buffer === undefined) {
+          return current;
+        }
+
+        const next = { ...current, [path]: { ...buffer, content } };
+        buffersRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
+
+  const moveCursor = useCallback((path: string, position: CursorPosition) => {
+    setCursors((current) => {
+      const previous = current[path];
+
+      if (
+        previous !== undefined &&
+        previous.line === position.line &&
+        previous.column === position.column
+      ) {
         return current;
       }
 
-      return { ...current, [path]: { ...buffer, content } };
+      return { ...current, [path]: position };
     });
   }, []);
 
@@ -196,9 +230,11 @@ export function useWorkspace(projectState: ProjectState) {
 
   const hasUnsavedChanges = dirtyPaths.size > 0;
 
-  const activeBuffer = activePath === null ? undefined : buffers[activePath];
+  const activeTab = openTabs[activeTabIndex];
+  const activeBuffer = activeTab ? buffers[activeTab.path] : undefined;
   const isActiveDirty =
     activeBuffer !== undefined && activeBuffer.content !== activeBuffer.savedContent;
+  const activeCursor = activePath === null ? undefined : cursors[activePath];
 
   /** Guarda un archivo. Devuelve null si se guardo o el mensaje de error. */
   const saveBuffer = useCallback(
@@ -231,15 +267,15 @@ export function useWorkspace(projectState: ProjectState) {
   );
 
   const saveActiveFile = useCallback(async () => {
-    const path = activePathRef.current;
+    const path = tabsRef.current[indexRef.current]?.path ?? null;
 
     if (path === null) {
-      return;
+      return null;
     }
 
     setIsBusy(true);
     try {
-      await saveBuffer(path);
+      return await saveBuffer(path);
     } finally {
       setIsBusy(false);
     }
@@ -289,7 +325,11 @@ export function useWorkspace(projectState: ProjectState) {
 
   /** Crea un archivo o una carpeta. Devuelve null si funciono o el error. */
   const createEntry = useCallback(
-    async (kind: "file" | "folder", parentPath: string, name: string): Promise<string | null> => {
+    async (
+      kind: "file" | "folder",
+      parentPath: string,
+      name: string,
+    ): Promise<string | null> => {
       const current = projectRef.current;
 
       if (current === null) {
@@ -351,23 +391,22 @@ export function useWorkspace(projectState: ProjectState) {
       }
 
       const renamedPath = renamedNode.path;
+      const language = renamedNode.language ?? "plaintext";
 
-      setBuffers((buffersNow) => {
-        const next = rekey(buffersNow, path, renamedPath, newName);
-        buffersRef.current = next;
-        return next;
-      });
+      writeBuffers(rekeyBuffers(buffersRef.current, path, renamedPath, newName));
 
-      // El archivo abierto sigue al elemento renombrado, conservando sus cambios.
-      const openFile = activePathRef.current;
+      const tabs = tabsRef.current;
 
-      if (openFile !== null && isSamePathOrInside(openFile, path)) {
-        setActivePath(renamedPath + openFile.slice(path.length));
+      if (tabsInside(tabs, path).length > 0) {
+        writeTabs(rekeyTabs(tabs, path, renamedPath, newName, language));
       }
 
+      setCursors((current_) => rekeyCursors(current_, path, renamedPath));
+
+      // El índice activo no cambia: el número de pestañas sigue siendo el mismo.
       return null;
     },
-    [runMutation],
+    [runMutation, writeBuffers, writeTabs],
   );
 
   const deleteEntry = useCallback(
@@ -387,35 +426,202 @@ export function useWorkspace(projectState: ProjectState) {
         return error;
       }
 
-      setBuffers((buffersNow) => {
-        const next = removeKey(buffersNow, path);
-        buffersRef.current = next;
-        return next;
-      });
+      const tabs = tabsRef.current;
+      const removed = tabsInside(tabs, path);
 
-      if (activePathRef.current !== null && isSamePathOrInside(activePathRef.current, path)) {
-        setActivePath(null);
+      writeBuffers(removeBuffersInside(buffersRef.current, path));
+
+      if (removed.length > 0) {
+        writeTabs(tabs.filter((item) => !isSamePathOrInside(item.path, path)));
+        writeIndex(nextActiveIndex(tabs, removed.map((item) => item.path), indexRef.current));
       }
+
+      setCursors((current) => removeCursorsInside(current, path));
 
       return null;
     },
-    [runMutation],
+    [runMutation, writeBuffers, writeIndex, writeTabs],
+  );
+
+  /** Cierra una pestaña y descarta su búfer. Decide antes la interfaz si hay cambios. */
+  const closeTab = useCallback(
+    (path: string) => {
+      const tabs = tabsRef.current;
+
+      if (!tabs.some((item) => item.path === path)) {
+        return;
+      }
+
+      writeTabs(tabs.filter((item) => item.path !== path));
+      writeIndex(nextActiveIndex(tabs, [path], indexRef.current));
+      writeBuffers(withoutKey(buffersRef.current, path));
+      setCursors((current) => withoutKey(current, path));
+    },
+    [writeBuffers, writeIndex, writeTabs],
+  );
+
+  const isTabDirty = useCallback(
+    (path: string) => {
+      const buffer = buffersRef.current[path];
+      return buffer !== undefined && buffer.content !== buffer.savedContent;
+    },
+    [],
   );
 
   const resetWorkspace = useCallback(() => {
-    setBuffers({});
-    setActivePath(null);
+    writeBuffers({});
+    writeTabs([]);
+    writeIndex(-1);
+    setCursors({});
     setReveal(null);
     setQuery("");
     setResults([]);
+    setIsSearching(false);
     clearError();
-  }, [clearError]);
+  }, [clearError, writeBuffers, writeIndex, writeTabs]);
 
   useEffect(() => {
     if (project === null) {
       resetWorkspace();
     }
   }, [project, resetWorkspace]);
+
+  // -------------------------------------------------------------------------
+  // M1.4.0 - Recuperación y persistencia de la sesión
+  // -------------------------------------------------------------------------
+
+  /** Vuelve a abrir las pestañas de la sesión que sigan existiendo en el proyecto. */
+  const restoreSession = useCallback(
+    async (session: SessionState) => {
+      const current = projectRef.current;
+
+      if (current === null) {
+        return;
+      }
+
+      const wanted = restorableTabs(session, current.tree).slice(0, MAX_RESTORED_TABS);
+
+      if (wanted.length === 0) {
+        return;
+      }
+
+      setIsRestoring(true);
+
+      const restoredBuffers: Buffers = {};
+      const restoredTabs: OpenTab[] = [];
+      const restoredCursors: CursorMap = {};
+      const dropped: string[] = [];
+
+      for (const tab of wanted) {
+        try {
+          const file = await readProjectFile(tab.path, current.path);
+
+          restoredBuffers[tab.path] = {
+            name: file.name,
+            language: file.language,
+            content: file.content,
+            savedContent: file.content,
+          };
+          restoredTabs.push({ path: tab.path, name: file.name, language: file.language });
+
+          if (tab.line > 0) {
+            restoredCursors[tab.path] = { line: tab.line, column: 1 };
+          }
+        } catch {
+          // Un archivo que ya no se puede leer no impide recuperar el resto.
+          dropped.push(tab.name);
+        }
+      }
+
+      if (restoredTabs.length > 0) {
+        writeBuffers(restoredBuffers);
+        writeTabs(restoredTabs);
+
+        const active = session.activePath;
+
+        writeIndex(restoredActiveIndex(restoredTabs, session));
+        setCursors(restoredCursors);
+
+        if (active !== null && !restoredTabs.some((item) => item.path === active)) {
+          const activeName = session.openTabs.find((tab) => tab.path === active)?.name;
+          dropped.push(activeName ?? active);
+        }
+      }
+
+      if (dropped.length > 0) {
+        reportError(
+          `No se pudieron recuperar estos archivos porque ya no están disponibles: ${dropped.join(", ")}.`,
+        );
+      }
+
+      setIsRestoring(false);
+    },
+    [reportError, writeBuffers, writeIndex, writeTabs],
+  );
+
+  // Al abrir un proyecto se recupera su sesión anterior, si la hay.
+  useEffect(() => {
+    if (projectPath === null) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const session = await loadSession();
+
+        if (cancelled || session === null || session.lastProject !== projectPath) {
+          return;
+        }
+
+        await restoreSession(session);
+      } catch (cause) {
+        // Una sesión ilegible no debe impedir abrir el proyecto.
+        console.warn("[prisma] no se pudo recuperar la sesion anterior:", cause);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath, restoreSession]);
+
+  // Se espera a que termine la recuperación antes de guardar: si no, se guardaría la
+  // lista vacía de pestañas y se perderían las de la sesión anterior.
+  //
+  // Abrir, cerrar o cambiar de pestaña se guarda de inmediato, porque son acciones
+  // poco frecuentes y no conviene que dependan del retardo: si la ventana se cerrase
+  // justo después de abrir una pestaña, esa pestaña se perdería al recuperar.
+  useEffect(() => {
+    if (projectPath === null || isRestoring) {
+      return;
+    }
+
+    const state = buildSessionState(projectPath, openTabs, activePath, cursors);
+
+    void saveSession(state).catch((cause: unknown) => {
+      console.warn("[prisma] no se pudo guardar la sesion:", cause);
+    });
+  }, [projectPath, isRestoring, openTabs, activePath]);
+
+  // La posición del cursor cambia en cada pulsación, así que ahí sí se agrupa con
+  // retardo. Escribe por debajo del guardado anterior, que es la misma operación.
+  useEffect(() => {
+    if (projectPath === null || isRestoring) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      const state = buildSessionState(projectPath, openTabs, activePath, cursors);
+
+      void saveSession(state).catch((cause: unknown) => {
+        console.warn("[prisma] no se pudo guardar la sesion:", cause);
+      });
+    }, SESSION_SAVE_DELAY);
+
+    return () => clearTimeout(timer);
+  }, [projectPath, isRestoring, openTabs, activePath, cursors]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -443,29 +649,40 @@ export function useWorkspace(projectState: ProjectState) {
 
   return {
     buffers,
+    openTabs,
+    activeTabIndex,
+    activeTab,
     activePath,
     activeBuffer,
+    activeCursor,
     isActiveDirty,
     dirtyPaths,
     hasUnsavedChanges,
     error,
     isBusy,
     isLoadingFile,
+    isRestoring,
     reveal,
     query,
     results,
     isSearching,
     selectFile,
+    selectTab,
     updateContent,
+    moveCursor,
     saveActiveFile,
+    saveBuffer,
     saveAll,
     createEntry,
     renameEntry,
     deleteEntry,
     setQuery,
-    clearReveal: () => setReveal(null),
+    clearReveal: useCallback(() => setReveal(null), []),
     reportError,
     clearError,
+    closeTab,
+    isTabDirty,
+    resetWorkspace,
   };
 }
 

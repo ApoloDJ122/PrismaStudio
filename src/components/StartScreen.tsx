@@ -1,18 +1,21 @@
+import prismaLogo from "../assets/prisma-logo.png";
+
 interface StartScreenProps {
   error: string | null;
   isBusy: boolean;
+  isRestoring: boolean;
   onCreate: () => void;
   onOpen: () => void;
 }
 
-function StartScreen({ error, isBusy, onCreate, onOpen }: StartScreenProps) {
+function StartScreen({ error, isBusy, isRestoring, onCreate, onOpen }: StartScreenProps) {
+  const isBlocked = isBusy || isRestoring;
+
   return (
     <section className="start-screen">
       <div className="start-screen__panel">
         <header className="start-screen__brand">
-          <span className="start-screen__logo" aria-hidden="true">
-            P
-          </span>
+          <img className="start-screen__logo" src={prismaLogo} alt="" width={56} height={56} />
           <h1 className="start-screen__title">Prisma</h1>
           <p className="start-screen__description">
             Herramienta visual para agilizar el desarrollo de proyectos.
@@ -24,7 +27,7 @@ function StartScreen({ error, isBusy, onCreate, onOpen }: StartScreenProps) {
             type="button"
             className="button button--primary start-screen__action"
             onClick={onCreate}
-            disabled={isBusy}
+            disabled={isBlocked}
           >
             Crear proyecto web
           </button>
@@ -32,11 +35,13 @@ function StartScreen({ error, isBusy, onCreate, onOpen }: StartScreenProps) {
             type="button"
             className="button button--secondary start-screen__action"
             onClick={onOpen}
-            disabled={isBusy}
+            disabled={isBlocked}
           >
             Abrir proyecto
           </button>
         </div>
+
+        {isRestoring && <p className="start-screen__status">Recuperando el último proyecto...</p>}
 
         {error !== null && <p className="start-screen__error">{error}</p>}
       </div>

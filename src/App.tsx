@@ -22,6 +22,7 @@ function App() {
       <StartScreen
         error={workspace.error}
         isBusy={workspace.isBusy}
+        isRestoring={workspace.isRestoring}
         onCreate={() => setIsCreating(true)}
         onOpen={workspace.openExistingProject}
       />

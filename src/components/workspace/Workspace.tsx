@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import prismaLogo from "../../assets/prisma-logo.png";
 import { useWorkspace } from "../../hooks/useWorkspace";
 import type { ProjectState } from "../../hooks/useProject";
 import type { ProjectNode } from "../../types/project";
 import CloseProjectDialog from "../ui/CloseProjectDialog";
 import ConfirmDialog from "../ui/ConfirmDialog";
+import Modal from "../ui/Modal";
 import PromptDialog from "../ui/PromptDialog";
-import CodeEditor from "./CodeEditor";
+import CodeEditor, { type CodeEditorApi } from "./CodeEditor";
 import FileTree, { type TreeCommand } from "./FileTree";
 import SearchOverlay, { type PaletteMode } from "./SearchOverlay";
 import "./Workspace.css";
@@ -17,6 +19,8 @@ type Dialog =
   | { type: "rename"; path: string; name: string }
   | { type: "delete"; path: string; name: string; isFolder: boolean; dirty: number }
   | { type: "close-project" }
+  | { type: "close-tab"; path: string; name: string }
+  | { type: "run-unsaved" }
   | null;
 
 function relativeFolder(root: ProjectNode, folderPath: string): string {
@@ -32,32 +36,44 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
     project,
     error: projectError,
     isBusy: projectBusy,
+    runTarget,
     canExecute,
     execute,
     closeProject,
     clearError: clearProjectError,
   } = projectState;
   const {
+    buffers,
+    openTabs,
+    activeTabIndex,
+    activeTab,
     activePath,
     activeBuffer,
+    activeCursor,
     isActiveDirty,
     dirtyPaths,
     hasUnsavedChanges,
     error: workspaceError,
     isBusy,
     isLoadingFile,
+    isRestoring,
     reveal,
     query,
     results,
     isSearching,
     selectFile,
+    selectTab,
     updateContent,
+    moveCursor,
     saveActiveFile,
+    saveBuffer,
     saveAll,
     createEntry,
     renameEntry,
     deleteEntry,
     setQuery,
+    closeTab,
+    isTabDirty,
     clearReveal,
     reportError,
     clearError: clearWorkspaceError,
@@ -66,6 +82,11 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [palette, setPalette] = useState<PaletteMode | null>(null);
+  const editorApiRef = useRef<CodeEditorApi | null>(null);
+
+  const searchInActiveFile = useCallback(() => {
+    editorApiRef.current?.search();
+  }, []);
 
   const error = projectError ?? workspaceError;
 
@@ -151,8 +172,11 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
         }
 
         failure = await renameEntry(dialog.path, value);
-      } else {
+      } else if (dialog.type === "delete") {
         failure = await deleteEntry(dialog.path);
+      } else {
+        // Los diálogos de cierre y de ejecución no pasan por aquí.
+        return;
       }
 
       if (failure !== null) {
@@ -166,20 +190,112 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
   );
 
   const requestCloseProject = useCallback(() => {
-    if (hasUnsavedChanges) {
+    // Verificar si alguna pestaña tiene cambios sin guardar
+    const dirtyTabs = openTabs.filter((tab) => {
+      const buffer = buffers[tab.path];
+      return buffer !== undefined && buffer.content !== buffer.savedContent;
+    });
+
+    if (dirtyTabs.length > 0) {
       setDialog({ type: "close-project" });
       return;
     }
 
     closeProject();
-  }, [closeProject, hasUnsavedChanges]);
+  }, [closeProject, openTabs, buffers]);
+
+  /*
+   * M1.4.0 - Ejecución.
+   *
+   * Con cambios sin guardar se pregunta antes, para no ejecutar una versión del
+   * proyecto que difiere de la que el usuario está viendo.
+   */
+  const requestRun = useCallback(() => {
+    if (hasUnsavedChanges) {
+      setDialog({ type: "run-unsaved" });
+      setDialogError(null);
+      return;
+    }
+
+    void execute();
+  }, [execute, hasUnsavedChanges]);
+
+  const confirmRun = useCallback(
+    async (saveFirst: boolean) => {
+      setDialogError(null);
+
+      if (saveFirst) {
+        const failure = await saveAll();
+
+        // Solo se ejecuta si todo se guardó bien: si no, el navegador abriría
+        // una versión del proyecto que difiere de la que se ve en pantalla.
+        if (failure !== null) {
+          setDialogError(failure);
+          return;
+        }
+      }
+
+      closeDialog();
+      await execute();
+    },
+    [closeDialog, execute, saveAll],
+  );
+
+  const requestCloseTab = useCallback(
+    (path: string, name: string) => {
+      if (isTabDirty(path)) {
+        setDialog({ type: "close-tab", path, name });
+        setDialogError(null);
+        return;
+      }
+
+      closeTab(path);
+    },
+    [closeTab, isTabDirty],
+  );
+
+  const confirmCloseTab = useCallback(
+    async (saveFirst: boolean) => {
+      if (dialog?.type !== "close-tab") {
+        return;
+      }
+
+      const { path } = dialog;
+      setDialogError(null);
+
+      if (saveFirst) {
+        const failure = await saveBuffer(path);
+
+        // Solo se cierra si el guardado funcionó: así no se pierde el trabajo.
+        if (failure !== null) {
+          setDialogError(failure);
+          return;
+        }
+      }
+
+      closeDialog();
+      closeTab(path);
+    },
+    [closeDialog, dialog, saveBuffer],
+  );
 
   // Atajos de teclado globales del workspace.
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const mod = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
 
-      if (mod && event.key.toLowerCase() === "s") {
+      if (event.key === "Escape") {
+        setPalette(null);
+        return;
+      }
+
+      if (!mod) {
+        // F3 y Shift+F3 los gestiona el propio buscador de Monaco.
+        return;
+      }
+
+      if (key === "s") {
         event.preventDefault();
 
         if (event.shiftKey) {
@@ -187,19 +303,57 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
         } else {
           void saveActiveFile();
         }
-      } else if (mod && !event.shiftKey && event.key.toLowerCase() === "p") {
+
+        return;
+      }
+
+      // Ctrl+W cierra la pestaña activa; Ctrl+Shift+W cierra el proyecto.
+      if (key === "w") {
         event.preventDefault();
-        setPalette("open");
-      } else if (mod && event.shiftKey && event.key.toLowerCase() === "f") {
+
+        if (event.shiftKey) {
+          requestCloseProject();
+        } else if (activePath !== null) {
+          requestCloseTab(activePath, openTabs[activeTabIndex]?.name ?? "el archivo");
+        }
+
+        return;
+      }
+
+      // Ctrl+F busca dentro del archivo; Ctrl+P abre el buscador de archivos;
+      // Ctrl+Shift+F busca en el contenido de todo el proyecto.
+      if (key === "f" && !event.shiftKey) {
+        event.preventDefault();
+        searchInActiveFile();
+        return;
+      }
+
+      if (key === "p" && !event.shiftKey) {
         event.preventDefault();
         setQuery("");
+        setPalette("open");
+        return;
+      }
+
+      if (key === "f" && event.shiftKey) {
+        event.preventDefault();
         setPalette("search");
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [saveActiveFile, saveAll, setQuery]);
+  }, [
+    activePath,
+    activeTabIndex,
+    openTabs,
+    requestCloseProject,
+    requestCloseTab,
+    saveActiveFile,
+    saveAll,
+    searchInActiveFile,
+    setQuery,
+  ]);
 
   // Aviso del navegador al cerrar la ventana con cambios pendientes.
   useEffect(() => {
@@ -221,13 +375,12 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
   }
 
   const root = project.tree;
-  const relativePath =
-    activePath === null ? null : activePath.replace(root.path, "").replace(/^[\\/]+/, "");
 
   return (
     <div className="workspace">
       <header className="workspace__header">
         <div className="workspace__identity">
+          <img className="workspace__logo" src={prismaLogo} alt="" width={22} height={22} />
           <span className="workspace__name">{project.name}</span>
           <span className="workspace__path" title={project.path}>
             {project.path}
@@ -255,9 +408,14 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
             type="button"
             className="button button--primary"
             disabled={!canExecute || projectBusy}
-            onClick={() => void execute()}
+            title={
+              runTarget === null
+                ? "Este proyecto no tiene un index.html que ejecutar."
+                : `Abrir ${runTarget.relativePath} en el navegador`
+            }
+            onClick={requestRun}
           >
-            Ejecutar
+            {projectBusy ? "Abriendo..." : "Ejecutar"}
           </button>
           <button type="button" className="button button--ghost" onClick={requestCloseProject}>
             Cerrar
@@ -318,21 +476,66 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
         </aside>
 
         <main className="workspace__main">
-          <div className="workspace__tabbar">
-            <span className="workspace__tab workspace__tab--active">
-              {activeBuffer?.name ?? "Sin archivo"}
-              {isActiveDirty ? " *" : ""}
-            </span>
-            {relativePath !== null && <span className="workspace__tabPath">{relativePath}</span>}
+          <div className="workspace__tabbar" role="tablist" aria-label="Archivos abiertos">
+            {openTabs.length === 0 ? (
+              <span className="workspace__tab workspace__tab--active">
+                {isRestoring ? "Recuperando..." : "Sin archivo"}
+              </span>
+            ) : (
+              openTabs.map((tab, index) => {
+                const isActive = index === activeTabIndex;
+                const isDirty = isTabDirty(tab.path);
+
+                return (
+                  <span
+                    key={tab.path}
+                    role="tab"
+                    aria-selected={isActive}
+                    tabIndex={isActive ? 0 : -1}
+                    title={tab.path}
+                    className={`workspace__tab ${isActive ? "workspace__tab--active" : ""}`}
+                    onClick={() => selectTab(index)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        selectTab(index);
+                      }
+                    }}
+                  >
+                    {tab.name}
+                    {isDirty && " *"}
+                    <span
+                      className="workspace__tab-close"
+                      role="button"
+                      aria-label={`Cerrar ${tab.name}`}
+                      onClick={(event) => {
+                        // Sin esto el clic cerraría la pestaña y la activaría a la vez.
+                        event.stopPropagation();
+                        requestCloseTab(tab.path, tab.name);
+                      }}
+                      title="Cerrar pestaña"
+                    >
+                      ×
+                    </span>
+                  </span>
+                );
+              })
+            )}
           </div>
 
           <CodeEditor
-            path={activePath}
-            language={activeBuffer?.language ?? "plaintext"}
+            path={activeTab?.path ?? null}
+            language={activeTab?.language ?? "plaintext"}
             content={activeBuffer?.content ?? ""}
-            revealLine={reveal !== null && reveal.path === activePath ? reveal.line : null}
+            revealLine={reveal !== null && reveal.path === activeTab?.path ? reveal.line : null}
+            apiRef={editorApiRef}
             onChange={updateContent}
             onRevealHandled={clearReveal}
+            onCursorChange={(position) => {
+              if (activePath !== null) {
+                moveCursor(activePath, position);
+              }
+            }}
             onError={reportError}
           />
         </main>
@@ -364,6 +567,17 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
           }}
         />
       )}
+
+      <div className="workspace__statusbar">
+        <span className="workspace__statusbarLanguage">{activeTab?.language ?? "HTML"}</span>
+        <span className="workspace__statusbarPosition">
+          Ln {activeCursor?.line ?? 1}, Col {activeCursor?.column ?? 1}
+        </span>
+        <span className="workspace__statusbarSaveState">
+          {isActiveDirty ? "Sin guardar" : "Guardado"}
+        </span>
+        {isRestoring && <span className="workspace__statusbarSaveState">Recuperando sesión...</span>}
+      </div>
 
       {dialog?.type === "new-file" && (
         <PromptDialog
@@ -421,6 +635,54 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
           onConfirm={() => void handleConfirmDialog("")}
           onCancel={closeDialog}
         />
+      )}
+
+      {dialog?.type === "close-tab" && (
+        <ConfirmDialog
+          title="Cerrar pestaña"
+          message={`"${dialog.name}" tiene cambios sin guardar. ¿Qué quieres hacer con ellos?`}
+          confirmLabel="Guardar y cerrar"
+          extraLabel="No guardar"
+          cancelLabel="Cancelar"
+          onConfirm={() => void confirmCloseTab(true)}
+          onExtra={() => void confirmCloseTab(false)}
+          onCancel={closeDialog}
+        />
+      )}
+
+      {dialog?.type === "run-unsaved" && (
+        <Modal
+          title="Ejecutar el proyecto"
+          description={`Hay ${dirtyPaths.size} ${
+            dirtyPaths.size === 1 ? "archivo con cambios sin guardar" : "archivos con cambios sin guardar"
+          }. El navegador abrirá los archivos del disco.`}
+          onClose={closeDialog}
+          width={440}
+        >
+          <div className="modal__footer">
+            <button type="button" className="button button--secondary" onClick={closeDialog}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="button button--secondary"
+              disabled={isBusy}
+              onClick={() => void confirmRun(false)}
+            >
+              Ejecutar sin guardar
+            </button>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={isBusy}
+              onClick={() => void confirmRun(true)}
+            >
+              {isBusy ? "Guardando..." : "Guardar y ejecutar"}
+            </button>
+          </div>
+
+          {dialogError !== null && <p className="modal__error">{dialogError}</p>}
+        </Modal>
       )}
 
       {dialog?.type === "close-project" && (

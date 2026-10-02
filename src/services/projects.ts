@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type { ProjectFile, ProjectInfo, ProjectNode, SearchMatch } from "../types/project";
+import type { RunTarget } from "../types/session";
 
 export function createWebProject(name: string, parentDir: string): Promise<ProjectInfo> {
   return invoke<ProjectInfo>("create_web_project", { name, parentDir });
@@ -58,8 +59,14 @@ export function searchProjectFiles(
   return invoke<SearchMatch[]>("search_project_files", { projectPath, query });
 }
 
-export function openInBrowser(path: string): Promise<void> {
-  return invoke<void>("open_in_browser", { path });
+/** Comprueba si el proyecto se puede ejecutar y devuelve su archivo de entrada. */
+export function resolveRunEntry(projectPath: string): Promise<RunTarget> {
+  return invoke<RunTarget>("resolve_run_entry", { projectPath });
+}
+
+/** Valida el proyecto y abre su archivo HTML en el navegador del sistema. */
+export function runProject(projectPath: string): Promise<RunTarget> {
+  return invoke<RunTarget>("run_project", { projectPath });
 }
 
 export function pickProjectFolder(): Promise<string | null> {

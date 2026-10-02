@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,18 @@ use tauri_plugin_opener::OpenerExt;
 const MAX_TREE_DEPTH: usize = 8;
 const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
 const MAX_SEARCH_RESULTS: usize = 200;
+
+/// Archivo HTML que se abre al ejecutar el proyecto.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunTarget {
+    /// Ruta completa, en la misma forma que la devuelve el arbol de archivos.
+    pub path: String,
+    /// Ruta relativa al proyecto, para poder mostrarla en la interfaz.
+    pub relative_path: String,
+    /// `true` si el archivo es el `index.html` de la raiz del proyecto.
+    pub is_root_index: bool,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -506,17 +519,121 @@ pub fn search_project_files(
     Ok(matches)
 }
 
-#[tauri::command]
-pub fn open_in_browser(app: AppHandle, path: String) -> Result<(), String> {
-    let target = PathBuf::from(&path);
+// ---------------------------------------------------------------------------
+// Ejecucion del proyecto
+// ---------------------------------------------------------------------------
 
-    if !target.is_file() {
-        return Err("No se encontró el archivo index.html del proyecto.".to_string());
+/// Busca el HTML de entrada del proyecto.
+///
+/// Recorre en anchura, asi que gana siempre el `index.html` mas cercano a la
+/// raiz: si existe en la raiz se usa ese, y solo si falta se recurre a uno
+/// dentro de una subcarpeta. Devuelve la ruta tal y como la construye el arbol
+/// de archivos, para que el frontend pueda mostrarla sin transformarla.
+fn find_entry_html(root: &Path) -> Option<PathBuf> {
+    let mut pending: VecDeque<(PathBuf, usize)> = VecDeque::new();
+    pending.push_back((root.to_path_buf(), 0));
+
+    while let Some((folder, depth)) = pending.pop_front() {
+        // Una carpeta ilegible no debe impedir encontrar el archivo de entrada.
+        let entries = match fs::read_dir(&folder) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        let mut subfolders: Vec<PathBuf> = Vec::new();
+
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            let name = entry_name(&entry_path);
+
+            if name.starts_with('.') {
+                continue;
+            }
+
+            if entry_path.is_dir() {
+                if depth < MAX_TREE_DEPTH {
+                    subfolders.push(entry_path);
+                }
+            } else if name.to_lowercase() == "index.html" {
+                return Some(entry_path);
+            }
+        }
+
+        for subfolder in subfolders {
+            pending.push_back((subfolder, depth + 1));
+        }
     }
 
+    None
+}
+
+/// Ruta del archivo de entrada respecto al proyecto, siempre con `/` como
+/// separador: es un texto para mostrar en la interfaz, no una ruta real.
+fn relative_to(root: &Path, target: &Path) -> String {
+    match target.strip_prefix(root) {
+        Ok(value) => value.to_string_lossy().replace('\\', "/"),
+        Err(_) => entry_name(target),
+    }
+}
+
+/// Valida el proyecto y localiza su archivo de entrada sin abrir nada.
+/// La interfaz la usa para saber si el proyecto se puede ejecutar.
+#[tauri::command]
+pub fn resolve_run_entry(project_path: String) -> Result<RunTarget, String> {
+    let (entry, _) = locate_run_entry(&project_path)?;
+
+    Ok(entry)
+}
+
+/// Localiza el archivo de entrada comprobando el proyecto de verdad.
+/// El segundo valor es la raiz canonicalizada, que hace falta para validar
+/// que el archivo encontrado sigue dentro del proyecto.
+fn locate_run_entry(project_path: &str) -> Result<(RunTarget, PathBuf), String> {
+    if project_path.trim().is_empty() {
+        return Err("No hay ningún proyecto abierto.".to_string());
+    }
+
+    let root = canonical_project(project_path)
+        .map_err(|_| "No se puede acceder al proyecto.".to_string())?;
+
+    if !root.is_dir() {
+        return Err("No se puede acceder al proyecto.".to_string());
+    }
+
+    let folder = PathBuf::from(project_path);
+    let entry = find_entry_html(&folder).ok_or_else(|| {
+        "No se encontró index.html en este proyecto.".to_string()
+    })?;
+
+    // El archivo se busca desde la ruta mostrada al usuario, pero se valida
+    // contra la raiz canonicalizada para confirmar que no se sale del proyecto.
+    ensure_inside_project(&root, &entry.to_string_lossy())?;
+
+    let is_root_index = entry
+        .parent()
+        .map(|parent| parent == folder.as_path())
+        .unwrap_or(false);
+
+    let target = RunTarget {
+        relative_path: relative_to(&folder, &entry),
+        path: entry.to_string_lossy().to_string(),
+        is_root_index,
+    };
+
+    Ok((target, root))
+}
+
+/// Ejecuta el proyecto: valida todo de nuevo y abre el HTML de entrada en el
+/// navegador predeterminado del sistema. No hay preview interno.
+#[tauri::command]
+pub fn run_project(app: AppHandle, project_path: String) -> Result<RunTarget, String> {
+    let (target, _) = locate_run_entry(&project_path)?;
+
     app.opener()
-        .open_path(target.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|_| "No se pudo abrir el archivo en el navegador.".to_string())
+        .open_path(target.path.clone(), None::<&str>)
+        .map_err(|_| "No se pudo ejecutar el proyecto.".to_string())?;
+
+    Ok(target)
 }
 
 #[cfg(test)]
@@ -709,14 +826,14 @@ mod tests {
             .map(|n| n.path.clone())
             .unwrap();
         let about = create_file(root.clone(), pages_path.clone(), "about.html".into()).unwrap();
-        let about_path = find_node(&find_node(&about, "pages").unwrap(), "about.html")
+        let about_path = find_node(find_node(&about, "pages").unwrap(), "about.html")
             .unwrap()
             .path
             .clone();
         fs::write(&about_path, "<h1>Nosotros</h1>").unwrap();
 
         let tree = rename_entry(root.clone(), about_path, "nosotros.html".into()).unwrap();
-        let renamed = find_node(&find_node(&tree, "pages").unwrap(), "nosotros.html");
+        let renamed = find_node(find_node(&tree, "pages").unwrap(), "nosotros.html");
         assert!(renamed.is_some());
         assert!(Path::new(&find_node(&tree, "pages").unwrap().path)
             .join("nosotros.html")
@@ -746,13 +863,13 @@ mod tests {
         let pages = create_folder(root.clone(), root.clone(), "pages".into()).unwrap();
         let pages_path = find_node(&pages, "pages").unwrap().path.clone();
         let tree = create_file(root.clone(), pages_path.clone(), "about.html".into()).unwrap();
-        let about_path = find_node(&find_node(&tree, "pages").unwrap(), "about.html")
+        let about_path = find_node(find_node(&tree, "pages").unwrap(), "about.html")
             .unwrap()
             .path
             .clone();
 
         let tree = delete_entry(root.clone(), about_path).unwrap();
-        assert!(find_node(&find_node(&tree, "pages").unwrap(), "about.html").is_none());
+        assert!(find_node(find_node(&tree, "pages").unwrap(), "about.html").is_none());
         assert!(!Path::new(&pages_path).join("about.html").exists());
 
         // borrar una carpeta con contenido
@@ -807,6 +924,129 @@ mod tests {
         assert!(search_project_files(root.clone(), "no-existe-esto".into())
             .unwrap()
             .is_empty());
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    // -----------------------------------------------------------------------
+    // M1.4.0 - Ejecucion del proyecto
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn finds_root_index_html_and_reports_it_as_root() {
+        let (base, info) = new_project("run_root", "ejecutar");
+        let root = info.path.clone();
+
+        let target = resolve_run_entry(root.clone()).unwrap();
+
+        assert!(target.is_root_index);
+        assert_eq!(target.relative_path, "index.html");
+        assert_eq!(target.path, Path::new(&root).join("index.html").to_string_lossy());
+        // La ruta debe ser la misma clave que usa el arbol en el frontend.
+        assert!(find_node(&info.tree, "index.html").is_some());
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn root_index_html_wins_over_nested_one() {
+        let (base, info) = new_project("run_priority", "prioridad");
+        let root = info.path.clone();
+
+        // Una subcarpeta con su propio index.html no debe desplazar al de la raiz,
+        // aunque el arbol ordene las carpetas primero.
+        fs::create_dir_all(Path::new(&root).join("pages")).unwrap();
+        fs::write(Path::new(&root).join("pages/index.html"), "<h1>interna</h1>").unwrap();
+
+        let target = resolve_run_entry(root.clone()).unwrap();
+        assert!(target.is_root_index);
+        assert_eq!(target.relative_path, "index.html");
+
+        // Sin index.html en la raiz, se usa el mas cercano a la raiz.
+        fs::remove_file(Path::new(&root).join("index.html")).unwrap();
+        let nested = resolve_run_entry(root).unwrap();
+        assert!(!nested.is_root_index);
+        assert_eq!(nested.relative_path, "pages/index.html");
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn finds_shallowest_index_html_with_folders_of_resources() {
+        let base = temp_dir("run_nested");
+        let project = base.join("sitio-con-carpetas");
+        fs::create_dir_all(project.join("css")).unwrap();
+        fs::create_dir_all(project.join("js")).unwrap();
+        fs::create_dir_all(project.join("assets/img")).unwrap();
+        fs::create_dir_all(project.join("pages/dentro")).unwrap();
+
+        fs::write(project.join("css/style.css"), "body{}").unwrap();
+        fs::write(project.join("js/app.js"), "console.log(1)").unwrap();
+        fs::write(project.join("assets/img/logo.png"), "binario").unwrap();
+        // El HTML mas profundo debe perder frente a uno de una carpeta menos.
+        fs::write(project.join("pages/index.html"), "<h1>paginas</h1>").unwrap();
+        fs::write(project.join("pages/dentro/index.html"), "<h1>profundo</h1>").unwrap();
+
+        let info = open_project(project.to_string_lossy().into()).unwrap();
+        let target = resolve_run_entry(info.path.clone()).unwrap();
+
+        assert_eq!(target.relative_path, "pages/index.html");
+        assert!(!target.is_root_index);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn reports_clear_message_when_index_html_is_missing() {
+        let base = temp_dir("run_missing");
+        let project = base.join("sin-html");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("notas.txt"), "sin html").unwrap();
+        fs::write(project.join("estilo.css"), "body{}").unwrap();
+
+        let info = open_project(project.to_string_lossy().into()).unwrap();
+        let error = resolve_run_entry(info.path.clone()).unwrap_err();
+
+        assert_eq!(error, "No se encontró index.html en este proyecto.");
+        assert!(error.chars().all(|c| !c.is_ascii_digit()));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn reports_clear_message_when_project_no_longer_exists() {
+        let (base, info) = new_project("run_gone", "se-fue");
+        let root = info.path.clone();
+
+        fs::remove_dir_all(&root).unwrap();
+
+        // El proyecto se todavia tiene abierto, pero su carpeta ya no esta.
+        assert_eq!(
+            resolve_run_entry(root.clone()).unwrap_err(),
+            "No se puede acceder al proyecto."
+        );
+        assert_eq!(
+            resolve_run_entry("   ".into()).unwrap_err(),
+            "No hay ningún proyecto abierto."
+        );
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn ignores_hidden_folders_when_looking_for_entry() {
+        let base = temp_dir("run_hidden");
+        let project = base.join("con-ocultos");
+        fs::create_dir_all(project.join(".cache")).unwrap();
+
+        fs::write(project.join(".cache/index.html"), "<h1>cache</h1>").unwrap();
+        fs::write(project.join("index.html"), "<h1>real</h1>").unwrap();
+
+        let info = open_project(project.to_string_lossy().into()).unwrap();
+        let target = resolve_run_entry(info.path.clone()).unwrap();
+
+        assert!(target.is_root_index);
+        assert_eq!(target.relative_path, "index.html");
 
         let _ = fs::remove_dir_all(&base);
     }

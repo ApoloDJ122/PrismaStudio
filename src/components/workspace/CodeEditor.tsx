@@ -1,17 +1,55 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 
 import type * as Monaco from "monaco-editor";
 
 import "../../editor/monacoEnvironment";
 
+export type CursorPosition = {
+  line: number;
+  column: number;
+};
+
+/** Acciones del editor que la interfaz necesita disparar desde un atajo. */
+export type CodeEditorApi = {
+  /** Abre la búsqueda dentro del archivo. F3 y Shift+F3 los gestiona Monaco. */
+  search: () => void;
+};
+
 interface CodeEditorProps {
-  path: string | null;
+  path: string | null | undefined;
   language: string;
   content: string;
   revealLine: number | null;
+  apiRef?: RefObject<CodeEditorApi | null>;
   onChange: (content: string) => void;
   onRevealHandled: () => void;
+  onCursorChange?: (position: CursorPosition) => void;
   onError: (message: string) => void;
+}
+
+/** Detecta el lenguaje de Monaco basado en la extensión del archivo. */
+function detectLanguage(path: string | null | undefined): string {
+  if (path === null || path === undefined || path === "") {
+    return "plaintext";
+  }
+
+  const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
+
+  switch (ext) {
+    case ".html":
+    case ".htm":
+      return "html";
+    case ".css":
+      return "css";
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+      return "javascript";
+    case ".json":
+      return "json";
+    default:
+      return "plaintext";
+  }
 }
 
 /**
@@ -23,8 +61,10 @@ function CodeEditor({
   language,
   content,
   revealLine,
+  apiRef,
   onChange,
   onRevealHandled,
+  onCursorChange,
   onError,
 }: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -33,6 +73,7 @@ function CodeEditor({
   const modelRef = useRef<Monaco.editor.ITextModel | null>(null);
   const onChangeRef = useRef(onChange);
   const onRevealRef = useRef(onRevealHandled);
+  const onCursorRef = useRef(onCursorChange);
   const onErrorRef = useRef(onError);
 
   const [isReady, setIsReady] = useState(false);
@@ -40,10 +81,14 @@ function CodeEditor({
 
   onChangeRef.current = onChange;
   onRevealRef.current = onRevealHandled;
+  onCursorRef.current = onCursorChange;
   onErrorRef.current = onError;
 
+  // Detectar lenguaje si no se proporciona o si la extensión coincide
+  const effectiveLanguage = detectLanguage(path) !== "plaintext" ? detectLanguage(path) : language;
+
   useEffect(() => {
-    if (path === null || editorRef.current !== null) {
+    if (path === null || path === undefined || editorRef.current !== null) {
       return;
     }
 
@@ -97,7 +142,7 @@ function CodeEditor({
     const monaco = monacoRef.current;
     const editor = editorRef.current;
 
-    if (monaco === null || editor === null || path === null || !isReady) {
+    if (monaco === null || editor === null || path === null || path === undefined || !isReady) {
       return;
     }
 
@@ -111,7 +156,7 @@ function CodeEditor({
       model = existing;
     } else {
       existing?.dispose();
-      model = monaco.editor.createModel(content, language, uri);
+      model = monaco.editor.createModel(content, effectiveLanguage, uri);
       modelRef.current = model;
     }
 
@@ -132,7 +177,7 @@ function CodeEditor({
       editor.focus();
       onRevealRef.current();
     }
-  }, [content, isReady, language, path, revealLine]);
+  }, [content, isReady, effectiveLanguage, path, revealLine]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -152,7 +197,70 @@ function CodeEditor({
     return () => subscription.dispose();
   }, [isReady]);
 
-  if (path === null) {
+  // La posición del cursor alimenta la barra de estado y se recuerda en la sesión.
+  useEffect(() => {
+    const editor = editorRef.current;
+
+    if (editor === null || onCursorRef.current === undefined) {
+      return;
+    }
+
+    function report() {
+      const current = editorRef.current;
+      const handler = onCursorRef.current;
+
+      if (current === null || handler === undefined) {
+        return;
+      }
+
+      const position = current.getPosition();
+
+      if (position === null) {
+        return;
+      }
+
+      handler({ line: position.lineNumber, column: position.column });
+    }
+
+    report();
+
+    const subscriptions = [
+      editor.onDidChangeCursorPosition(report),
+      editor.onDidChangeCursorSelection(report),
+    ];
+
+    return () => {
+      for (const subscription of subscriptions) {
+        subscription.dispose();
+      }
+    };
+  }, [isReady, path]);
+
+  // Publica las acciones del editor para que los atajos puedan dispararlas.
+  useEffect(() => {
+    if (apiRef === undefined) {
+      return;
+    }
+
+    apiRef.current = {
+      search: () => {
+        const editor = editorRef.current;
+
+        if (editor === null) {
+          return;
+        }
+
+        editor.focus();
+        editor.trigger("prisma", "actions.find", {});
+      },
+    };
+
+    return () => {
+      apiRef.current = null;
+    };
+  }, [apiRef, isReady, path]);
+
+  if (path === null || path === undefined) {
     return (
       <div className="editor editor--empty">
         <p className="editor__placeholder">

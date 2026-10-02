@@ -80,20 +80,27 @@ src/
 │   └── monacoEnvironment.ts    # workers de Monaco empaquetados por Vite
 ├── hooks/
 │   ├── useProject.ts           # ciclo de vida del proyecto: crear, abrir, ejecutar, cerrar
-│   └── useWorkspace.ts         # búferes, guardado, búsqueda y operaciones de archivos
+│   └── useWorkspace.ts         # búferes, pestañas, guardado, búsqueda y operaciones de archivos
 ├── services/
-│   └── projects.ts             # invocación de comandos Rust
+│   ├── projects.ts             # invocación de comandos Rust de proyectos y archivos
+│   └── session.ts              # lectura, escritura y borrado de la sesión guardada
+├── workspace/
+│   ├── state.ts                # lógica pura de pestañas y sesión, sin React
+│   └── state.test.ts           # pruebas de esa lógica con el runner de Node
 ├── styles/
 │   ├── global.css              # reset, variables CSS y botones compartidos
 │   ├── ui.css                  # diálogos y pantalla de error
 │   └── App.css                 # layout raíz
 └── types/
-    └── project.ts              # tipos ProjectInfo, ProjectNode, ProjectFile y SearchMatch
+    ├── project.ts              # tipos ProjectInfo, ProjectNode, ProjectFile y SearchMatch
+    ├── session.ts              # tipos RunTarget, SessionState y SessionTab
+    └── node-test.d.ts          # declaraciones mínimas de node:test y node:assert
 
 src-tauri/src/
 ├── lib.rs                      # registro de plugins y comandos
 ├── main.rs                     # punto de entrada
-└── projects.rs                 # comandos de proyectos y operaciones sobre archivos
+├── projects.rs                 # comandos de proyectos, archivos y ejecución externa
+└── session.rs                  # persistencia de la sesión en la carpeta de configuración
 ```
 
 ## Sistema de módulos y versiones
@@ -116,7 +123,7 @@ aportan funcionalidad se registran en el historial de versiones sin abrir una ve
 | Módulo | Nombre | Estado |
 | ------ | ------ | ------ |
 | 0 | Base técnica | Completado |
-| 1 | Proyectos web | En desarrollo (`M1.0.0`, `M1.1.0` y `M1.2.0` completadas) |
+| 1 | Proyectos web | En desarrollo (`M1.0.0` a `M1.4.0` completadas) |
 
 ## Historial de versiones
 
@@ -258,6 +265,111 @@ No implementado en `M1.2.0` (fuera de alcance): recargar el árbol desde el disc
 archivos mediante arrastrar y soltar, recuperador de archivos eliminados, designer visual, preview
 integrado, refactorización, git, terminal, plugins, autenticación, nube, colaboración e IA.
 
+- La búsqueda construye el árbol desde la ruta original del proyecto, no desde la ruta
+  canonicalizada, para que la ruta de un resultado sea la misma clave que usa el árbol en el
+  frontend. Cubierto por una prueba.
+- `useProject` queda dividido en dos hooks: `useProject` (crear, abrir, ejecutar y cerrar el
+  proyecto) y `useWorkspace` (búferes, guardado, búsqueda y operaciones sobre archivos). Ambos
+  devuelven el mensaje de error de la operación que han ejecutado para poder mostrarlo en el
+  diálogo correspondiente.
+- `FileTree` se reconstruye como lista de filas visibles: permite `Enter`, `F2`, `Supr` y las
+  flechas del teclado, marca `aria-current` el archivo abierto, marca con `*` los archivos y las
+  carpetas con cambios sin guardar, y ofrece el menú contextual. Cada fila es un componente
+  `React.memo` con propiedades primitivas para no volver a renderizar el árbol entero.
+- `CodeEditor` carga Monaco con `import()` diferido la primera vez que se abre un archivo, por lo
+  que la pantalla inicial ya no descarga el paquete del editor.
+- Nuevo `SearchOverlay` para `Ctrl + P` (abrir archivo por nombre) y `Ctrl + Shift + F` (buscar en
+  el contenido), con desplazamiento con flechas y `Enter`. La búsqueda de contenido se pide a Rust
+  con un retardo de 300 ms.
+- Diálogos reutilizables en `src/components/ui`: `Modal`, `PromptDialog`, `ConfirmDialog` y
+  `CloseProjectDialog` (guardar todo, descartar o cancelar).
+- `ErrorBoundary` en `src/main.tsx` para que un fallo de React muestre una pantalla de error con
+  la opción de recargar, en lugar de dejar la ventana en blanco.
+- Añadidos `Guardar` y `Guardar todo` en la cabecera, con `Ctrl + S` y `Ctrl + Shift + S`, y aviso
+  del navegador al cerrar la ventana con cambios pendientes.
+- `src-tauri/tauri.conf.json`: título de ventana `Prisma`, tamaño `1100x700` (mínimo `720x480`) y
+  política de seguridad de contenido (CSP) que solo permite los recursos de la propia aplicación.
+  Verificado que la aplicación carga y se renderiza con esa CSP.
+
+### M1.3.0 — Sistema completo de edición de código
+
+- **Sistema de pestañas**: Soporte para múltiples archivos abiertos simultáneamente con
+  barra de pestañas, indicadores de cambios sin guardar (`*`) y cierre con confirmación.
+- **Detección de lenguaje**: `.html` → HTML, `.css` → CSS, `.js` → JavaScript, con detección
+  automática para otros tipos compatibles con Monaco.
+- **Monaco Editor**: Configuración mejorada con resaltado de sintaxis, números de línea, búsqueda,
+  navegación y atajos de edición (Ctrl+Z, Ctrl+Y, Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+F).
+- **Búsqueda inline (Ctrl+F)**: Búsqueda de texto dentro del archivo activo, con navegación
+  siguiente/previa (F3/Shift+F3) y cierre (Escape).
+- **Guardado**: Soporte para botón Guardar, Ctrl+S, guardado en disco y actualización inmediata
+  del estado de cambios en todos los archivos abiertos.
+- **Cambios sin guardar**: Indicador `*` en la pestaña cuando el contenido se ha modificado y
+  aún no se ha guardado. Prevención de pérdida silenciosa al cerrar proyecto o pestañas.
+- **Integración con el árbol**: Seleccionar archivo del árbol abre en pestaña existente o crea
+  una nueva. Renombrado y eliminación de archivos actualizan correctamente el estado de las pestañas.
+- **Barra de estado**: Muestra lenguaje actual, número de línea, columna y estado de guardado.
+- **Confirmaciones**: Al cerrar una pestaña con cambios sin guardar, se muestra diálogo con opciones
+  de Guardar, No guardar o Cancelar. Al cerrar proyecto con cambios sin guardar, se solicita confirmación.
+- **Rendimiento**: Mantiene la ligereza de la aplicación sin dependencias innecesarias.
+- **UI funcional**: Mejoras organizativas en la disposición de pestañas, jerarquía visual y
+  separación visual entre árbol, pestañas y editor.
+
+#### M1.4.0 — Ejecución externa y persistencia del entorno
+
+Alcance implementado:
+
+- **Ejecución del proyecto**
+  - `Ejecutar` pide a Rust que localice la entrada del proyecto y la abra en el navegador
+    predeterminado del sistema.
+  - El `index.html` de la raíz del proyecto tiene prioridad. Si no existe, se busca el
+    `index.html` más cercano dentro de subcarpetas, prefiriendo siempre el de menor profundidad
+    (recorrido en anchura, máximo 8 niveles) y excluyendo carpetas ocultas.
+  - Se informa del archivo que se ha abierto cuando la entrada no está en la raíz.
+  - Si no hay ningún `index.html`, el botón queda desactivado y el motivo se explica en la interfaz
+    en lugar de fallar en silencio.
+  - Sigue sin haber navegador interno, preview, `iframe`, servidor local ni recarga automática: el
+    resultado se ve en el navegador del sistema y Prisma no interviene en los cambios del
+    proyecto.
+
+- **Persistencia de la sesión**
+  - La sesión se guarda en un archivo `session.json` dentro de la carpeta de configuración de la
+    aplicación, con una estructura versionada.
+  - Guarda únicamente lo mínimo: último proyecto abierto, pestañas (ruta, nombre y línea del
+    cursor) y archivo activo. **Nunca guarda el contenido de los archivos**, que sigue siendo la
+    única fuente de verdad y permanece en el disco.
+  - La escritura es atómica: se escribe un archivo temporal y se renombra sobre el destino, de
+    modo que un cierre inesperado nunca deja una sesión a medias.
+  - Un archivo de sesión ausente, vacío, ilegible o con otro formato se ignora en lugar de impedir
+    abrir Prisma.
+  - Si el proyecto guardado ya no existe, la sesión se descarta y se vuelve a la pantalla inicial.
+
+- **Recuperación del entorno**
+  - Al arrancar, Prisma intenta reabrir el último proyecto automáticamente.
+  - Las pestañas se recuperan solo si el archivo sigue existiendo en el proyecto y es compatible
+    con el editor. Los que no se recuperan se indican por su nombre, sin impedir la recuperación
+    del resto.
+  - Si el archivo activo ya no existe, se activa el primer archivo recuperado en lugar de dejar el
+    editor vacío.
+  - Si el proyecto no tiene pestañas, la aplicación abre el workspace en blanco, sin quedarse
+    bloqueada recuperándose.
+
+- **Decisiones de comportamiento**
+  - **Cerrar el proyecto explícitamente borra la sesión**: es una acción deliberada del usuario y
+    el siguiente arranque debe abrir la pantalla inicial.
+  - **Cerrar la ventana conserva la sesión**: en ese caso la sesión guardada es lo que permite
+    recuperar el trabajo.
+  - Abrir, cerrar o cambiar de pestaña se guarda de inmediato. La posición del cursor, que cambia
+    en cada pulsación, se agrupa con un retardo de 500 ms para no escribir en disco continuamente.
+  - Se espera a que termine la recuperación para no sobrescribir las pestañas anteriores con una
+    lista vacía.
+
+Corrección de `M1.3.0` incluida en esta versión:
+
+- Se corrigió un error que impedía abrir el workspace cuando la ruta del proyecto venía vacía
+  (`Cannot read properties of undefined (reading 'slice')`). La ruta se normaliza a `null`, el
+  editor acepta `undefined` y `tsconfig.json` activa `noUncheckedIndexedAccess` para que el error
+  no vuelva a aparecer por accesos fuera de rango.
+
 ## Estado actual
 
 Funciona actualmente:
@@ -272,51 +384,61 @@ Funciona actualmente:
   para HTML, CSS y JavaScript.
 - Las modificaciones se guardan en el archivo real del disco mediante el botón `Guardar` o
   `Ctrl + S`, y el estado de guardado se refleja en el árbol (`*`) y en la cabecera.
-- `Ejecutar` abre el `index.html` real del proyecto en el navegador predeterminado del sistema.
+- `Ejecutar` localiza la entrada del proyecto y abre el `index.html` real en el navegador
+  predeterminado del sistema, priorizando el de la raíz sobre los de subcarpetas.
 - Los archivos y carpetas del proyecto se crean, renombran y eliminan físicamente, y el árbol se
   actualiza sin reabrir el proyecto.
+- El workspace trabaja con varias pestañas: se pueden abrir archivos nuevos, cambiar entre ellos,
+  cerrar cada uno y renombrar o eliminar sin perder el resto de las pestañas abiertas.
 - La búsqueda por contenido (`Ctrl + Shift + F`) y la apertura rápida por nombre (`Ctrl + P`)
-  recorren el proyecto real.
+  recorren el proyecto real, y la búsqueda dentro del archivo activo (`Ctrl + F`) funciona en el
+  propio editor.
 - `Cerrar proyecto` permite guardar todo, descartar los cambios o cancelar antes de salir.
-- Los errores de creación, apertura, lectura, guardado, búsqueda y ejecución se muestran en la
-  interfaz en lugar de fallar en silencio.
+- La sesión se guarda sola en disco: al reabrir la aplicación, Prisma recupera el último proyecto
+  con sus pestañas y devuelve el cursor a la línea aproximada donde estaba.
+- Los errores de creación, apertura, lectura, guardado, búsqueda, ejecución y recuperación se
+  muestran en la interfaz en lugar de fallar en silencio.
 
-Comprobaciones realizadas al cerrar `M1.2.0`:
+Comprobaciones realizadas al cerrar `M1.4.0`:
 
 - `npx tsc --noEmit` no informa de errores de tipos.
+- `npm test` ejecuta 29 pruebas del frontend con el runner integrado de Node, todas
+  correctas. Cubren el renombrado de archivos y carpetas, la eliminación con recálculo de la
+  pestaña activa, el cierre de pestañas, la construcción de la sesión y la recuperación
+  descartando lo que ya no existe o no es editable. Esa lógica vive en
+  `src/workspace/state.ts`, sin React, y `useWorkspace` la reutiliza en lugar de duplicarla.
+- `cargo test` en `src-tauri` da 22 pruebas, todas correctas. Además de las 15 de proyectos y
+  archivos, cubren la escritura, reescritura, lectura, tolerancia a archivos ausentes o dañados,
+  compatibilidad con sesiones antiguas y borrado de la sesión.
+- `cargo clippy --all-targets` no informa de avisos.
 - `npm run build` (Vite) compila sin errores. El paquete inicial de la interfaz baja de unos
   4,2 MB a unos 251 kB: Monaco queda en fragmentos que se descargan al abrir el primer archivo.
-- `cargo build` compila sin errores y `cargo test` en `src-tauri` da 9 pruebas, todas correctas.
-  Cubren la creación del proyecto, la lectura y guardado reales, el rechazo de nombres inválidos y
-  de duplicados, la creación de archivos y carpetas con actualización del árbol, el renombrado de
-  archivos y carpetas conservando el contenido, el borrado de archivos y carpetas, la búsqueda por
-  contenido y el rechazo de rutas fuera del proyecto en todas las operaciones.
-- `npm run tauri build` genera correctamente los instaladores de Windows (MSI y NSIS).
-- La aplicación se ha ejecutado en modo desarrollo (`npm run tauri dev`): la ventana se abre con
-  el título `Prisma` y el flujo completo de M1.2.0 responde a través de los comandos de Rust.
-- La política de seguridad de contenido (CSP) que se ha añadido a `src-tauri/tauri.conf.json` se ha
-  comprobado sirviendo el paquete de producción con esa misma cabecera: la aplicación carga y se
-  renderiza sin bloqueos.
 
 Limitaciones conocidas:
 
-- El flujo visual (diálogos, menú contextual, árbol, búsqueda) **no se ha verificado de forma
-  automatizada**: no existen pruebas de interfaz. La comprobación de la parte visual requiere una
-  revisión manual.
+- El flujo visual (diálogos, menú contextual, árbol, búsqueda, pestañas, ejecución y recuperación)
+  **no se ha verificado de forma automatizada**: no existen pruebas de interfaz. La comprobación de
+  la parte visual requiere una revisión manual.
+- La persistencia de la sesión está cubierta con pruebas unitarias del comando de Rust, pero no
+  se ha comprobado todavía el ciclo completo de la aplicación real: abrir Prisma, dejar pestañas,
+  cerrar la ventana y volver a arrancarla.
+- La sesión se escribe con un retardo de 500 ms para la posición del cursor. Abrir, cerrar o
+  cambiar de pestaña se guarda de inmediato, así que no se pierden pestañas por cerrar la ventana
+  justo después de abrirlas.
 - El árbol omite las entradas que empiezan por `.` y no supera 8 niveles de profundidad.
-- Solo hay un archivo abierto a la vez: no hay pestañas, ni divisor, ni historial.
 - El árbol no se actualiza solo si los cambios se hacen desde otro programa mientras Prisma está
   abierto: hay que volver a abrir el proyecto.
 - La búsqueda recorre los archivos reconocidos por el editor, con un máximo de 200 resultados, y no
   busca dentro de archivos de más de 2 MB.
+- Si el proyecto guardado ya no existe, la sesión se descarta y hay que elegir el proyecto de
+  nuevo: no hay recuperación ni aviso de que el proyecto se había movido.
 - Monaco Editor sigue siendo el mayor coste de la aplicación: su fragmento pesa unos 2,7 MB
   (706 kB comprimido), aunque ya no se descarga hasta que se abre un archivo.
 
 ## Próximos objetivos
 
 - Recargar el árbol de archivos desde el disco.
-- Ampliar el workspace: pestañas y divisor.
-- Previsualización del proyecto dentro de la aplicación.
+- Divisor redimensionable entre árbol y editor.
 - Ampliar el soporte a otros tipos de proyecto y tecnologías.
 
 Estos objetivos son únicamente los conocidos. No se ha definido ni implementado nada más.
@@ -441,3 +563,35 @@ Estos objetivos son únicamente los conocidos. No se ha definido ni implementado
 - `src-tauri/tauri.conf.json`: título de ventana `Prisma`, tamaño `1100x700` (mínimo `720x480`) y
   política de seguridad de contenido (CSP) que solo permite los recursos de la propia aplicación.
   Verificado que la aplicación carga y se renderiza con esa CSP.
+
+#### M1.4.0 — Ejecución externa y persistencia del entorno
+
+- Nuevo módulo `src-tauri/src/session.rs` con los comandos `load_session`, `save_session` y
+  `clear_session`. La sesión se escribe como json en la carpeta de configuración de la aplicación.
+  La escritura es atómica (archivo temporal y renombrado) y una sesión ausente, vacía, ilegible o
+  con otro formato se ignora sin impedir el arranque.
+- Nuevo comando `run_project` en Rust, que sustituye a `open_in_browser`. Valida el proyecto,
+  localiza la entrada (`index.html` de la raíz con prioridad y, si no existe, el más cercano dentro
+  de subcarpetas, por anchura y hasta 8 niveles, ignorando carpetas ocultas) y devuelve qué archivo
+  se ha abierto para poder informarlo en la interfaz.
+- Nuevo tipo `RunTarget` en `src/types/session.ts` con la ruta de la entrada y su procedencia.
+  `useProject` lo usa para activar o desactivar `Ejecutar` antes de que el usuario pulse.
+- Nuevo servicio `src/services/session.ts` y tipos `SessionState` y `SessionTab`.
+- Nuevo módulo `src/workspace/state.ts` con la lógica pura de pestañas y sesión: renombrado,
+  eliminación, cierre de pestañas, construcción de la sesión y filtrado de lo recuperable.
+  `useWorkspace` la reutiliza en lugar de mantener su propia copia.
+- Nuevo `src/workspace/state.test.ts` con 29 pruebas ejecutadas por el runner integrado de Node
+  (`npm test`), sin añadir dependencias al proyecto.
+- `src/types/node-test.d.ts` declara lo mínimo de `node:test` y `node:assert` que usan las pruebas,
+  para no introducir `@types/node` solo por eso.
+- `useProject` recupera el último proyecto al arrancar y borra la sesión si ese proyecto ya no
+  existe. `closeProject` borra la sesión porque cerrar el proyecto es una decisión explícita.
+- `useWorkspace` guarda la sesión con un retardo de 500 ms y espera a que termine la recuperación
+  antes de guardar, para no sobrescribir las pestañas anteriores con una lista vacía.
+- `CodeEditor` notifica la posición del cursor para poder guardarla en la sesión.
+- `StartScreen` muestra `Recuperando el último proyecto...` mientras se restaura el entorno.
+- Corrección del error `Cannot read properties of undefined (reading 'slice')`: la ruta del
+  proyecto se normaliza a `null`, el editor acepta `undefined` y `tsconfig.json` activa
+  `noUncheckedIndexedAccess`.
+- Regenerados los iconos de la aplicación desde `prisma.ico`, ya con la marca de Prisma, y
+  eliminado el logo de la plantilla de Tauri de la interfaz.

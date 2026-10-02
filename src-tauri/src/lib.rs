@@ -1,4 +1,5 @@
 mod projects;
+mod session;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -15,7 +16,11 @@ pub fn run() {
             projects::rename_entry,
             projects::delete_entry,
             projects::search_project_files,
-            projects::open_in_browser
+            projects::resolve_run_entry,
+            projects::run_project,
+            session::load_session,
+            session::save_session,
+            session::clear_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
