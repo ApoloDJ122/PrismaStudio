@@ -5,6 +5,7 @@ import type { ProjectNode } from "../types/project.ts";
 import { emptySession, type SessionState } from "../types/session.ts";
 import {
   buildSessionState,
+  externalChangeMessage,
   fixtures,
   nextActiveIndex,
   removeBuffersInside,
@@ -283,5 +284,39 @@ describe("recuperación de sesión", () => {
 
     assert.deepEqual(restorableTabs(empty, tree), []);
     assert.equal(restoredActiveIndex([], empty), -1);
+  });
+});
+
+describe("cambios externos en un archivo", () => {
+  const loaded = "<h1>Hola</h1>";
+
+  it("deja guardar si el archivo sigue igual que en el disco", () => {
+    // Es el caso normal, y no debe decir nada ni molestar.
+    assert.equal(externalChangeMessage({ name: "index.html", loaded, onDisk: loaded }), null);
+  });
+
+  it("avisa si el archivo cambió en el disco desde que se abrió", () => {
+    const message = externalChangeMessage({
+      name: "index.html",
+      loaded,
+      onDisk: "<h1>Hola a todos</h1>",
+    });
+
+    assert.notEqual(message, null);
+    // El mensaje tiene que decir qué archivo es y qué hacer al respecto.
+    assert.match(message ?? "", /index\.html/);
+    assert.match(message ?? "", /cambiado en el disco/);
+    assert.match(message ?? "", /vuelve a abrir/);
+  });
+
+  it("avisa aunque el archivo se haya quedado vacío", () => {
+    // Un archivo vaciado por fuera no es lo mismo que uno sin cambios.
+    assert.notEqual(externalChangeMessage({ name: "a.js", loaded, onDisk: "" }), null);
+  });
+
+  it("avisa con archivos de contenido idéntico pero distinto relleno", () => {
+    // Comparison byte a byte: un salto de línea final o un espacio bastan para
+    // que lo que se guarda de verdad sea distinto de lo que había.
+    assert.notEqual(externalChangeMessage({ name: "a.js", loaded: "a\n", onDisk: "a" }), null);
   });
 });

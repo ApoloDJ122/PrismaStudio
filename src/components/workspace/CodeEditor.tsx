@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 
 import type * as Monaco from "monaco-editor";
 
+import { defineEditorTheme } from "../../editor/editorTheme";
+import type { ThemeName } from "../../types/preferences";
 import "../../editor/monacoEnvironment";
 
 export type CursorPosition = {
@@ -20,6 +22,7 @@ interface CodeEditorProps {
   language: string;
   content: string;
   revealLine: number | null;
+  theme: ThemeName;
   apiRef?: RefObject<CodeEditorApi | null>;
   onChange: (content: string) => void;
   onRevealHandled: () => void;
@@ -61,6 +64,7 @@ function CodeEditor({
   language,
   content,
   revealLine,
+  theme,
   apiRef,
   onChange,
   onRevealHandled,
@@ -103,7 +107,7 @@ function CodeEditor({
 
         monacoRef.current = monaco;
         editorRef.current = monaco.editor.create(containerRef.current, {
-          theme: "vs-dark",
+          theme: "vs",
           automaticLayout: true,
           fontSize: 14,
           minimap: { enabled: false },
@@ -137,6 +141,24 @@ function CodeEditor({
       setIsReady(false);
     };
   }, [path]);
+
+  /*
+   * M1.5.0 - El tema del editor sigue al tema de la aplicación.
+   *
+   * Monaco no lee variables CSS, así que sus colores se construyen con los tokens
+   * del tema activo. Se reaplica al crear el editor y cada vez que el usuario
+   * cambia de tema, sin recrear el editor: así no se pierde el cursor, el
+   * desplazamiento ni las ediciones sin guardar.
+   */
+  useEffect(() => {
+    const monaco = monacoRef.current;
+
+    if (monaco === null) {
+      return;
+    }
+
+    defineEditorTheme(monaco, theme);
+  }, [isReady, theme]);
 
   useEffect(() => {
     const monaco = monacoRef.current;

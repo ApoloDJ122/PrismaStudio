@@ -1,3 +1,5 @@
+mod jsonfile;
+mod preferences;
 mod projects;
 mod session;
 
@@ -20,7 +22,9 @@ pub fn run() {
             projects::run_project,
             session::load_session,
             session::save_session,
-            session::clear_session
+            session::clear_session,
+            preferences::load_preferences,
+            preferences::save_preferences
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

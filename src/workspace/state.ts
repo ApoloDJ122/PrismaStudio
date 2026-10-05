@@ -170,6 +170,36 @@ export function nextActiveIndex(
   return Math.max(0, activeIndex - removedBefore);
 }
 
+/** Contenido que se comparó con el disco para decidir si un archivo es editable. */
+export type ExternalChange = {
+  name: string;
+  /** Lo que había en el archivo cuando se abrió o se guardó por última vez. */
+  loaded: string;
+  /** Lo que hay ahora en el disco. */
+  onDisk: string;
+};
+
+/**
+ * Decide si un archivo ha cambiado en el disco desde que Prisma lo abrió.
+ *
+ * Si es así, no se guarda: escribirlo dejaría fuera los cambios que hizo otra
+ * persona o programa, y Prisma no tiene forma de mezclarlos. Es preferible
+ * avisar y dejar que el usuario decida.
+ *
+ * Devuelve el mensaje para el usuario, o `null` si se puede guardar.
+ */
+export function externalChangeMessage(file: ExternalChange): string | null {
+  if (file.onDisk === file.loaded) {
+    return null;
+  }
+
+  return (
+    `"${file.name}" ha cambiado en el disco desde que lo abriste, así que no se ha guardado ` +
+    `para no perder esos cambios. Cierra la pestaña y vuelve a abrir el archivo si quieres ` +
+    `trabajar sobre la versión que está en el disco.`
+  );
+}
+
 /** Estado que se guarda en disco entre sesiones. */
 export function buildSessionState(
   projectPath: string,

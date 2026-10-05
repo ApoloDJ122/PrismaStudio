@@ -1,8 +1,14 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+//! Sesión del workspace: qué proyecto estaba abierto y con qué archivos.
+//!
+//! Es una comodidad, nunca un requisito. Los archivos del disco siguen siendo la
+//! única fuente de verdad: aquí no se guarda su contenido, solo la referencia.
+
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+
+use crate::jsonfile;
 
 const SESSION_FILE: &str = "session.json";
 const SESSION_VERSION: u32 = 1;
@@ -20,8 +26,6 @@ pub struct SessionTab {
 }
 
 /// Información mínima necesaria para reconstruir el workspace.
-/// No contiene el contenido de los archivos: los archivos siguen siendo la
-/// única fuente de verdad y viven en el disco.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SessionState {
@@ -42,80 +46,27 @@ impl Default for SessionState {
     }
 }
 
-fn session_file(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|error| format!("No se pudo localizar la carpeta de Prisma: {error}"))?;
-
-    Ok(dir.join(SESSION_FILE))
+fn session_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    jsonfile::config_file(app, SESSION_FILE)
 }
 
-/// Lectura pura del archivo de sesión. Un archivo ausente, vacio o ilegible
-/// devuelve `None` en lugar de un error: la sesión es una comodidad, nunca un
-/// requisito para abrir Prisma.
+/// Lectura de la sesión. Una sesión sin proyecto no sirve para recuperar nada, así
+/// que se trata como si no hubiera sesión: así un json ajeno en esa ruta no
+/// reaparece como un proyecto.
 fn read_session_from(path: &Path) -> Option<SessionState> {
-    if !path.is_file() {
-        return None;
-    }
-
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) => {
-            eprintln!("[prisma] no se pudo leer la sesion guardada: {error}");
-            return None;
-        }
-    };
-
-    if content.trim().is_empty() {
-        return None;
-    }
-
-    match serde_json::from_str::<SessionState>(&content) {
-        // Una sesión sin proyecto no sirve para recuperar nada, así que se trata
-        // como si no hubiera sesión. También descarta archivos json ajenos.
-        Ok(state) if state.last_project.is_some() => Some(state),
-        Ok(_) => None,
-        Err(error) => {
-            eprintln!("[prisma] la sesion guardada esta danada y se ignora: {error}");
-            None
-        }
-    }
+    jsonfile::read_json::<SessionState>(path).filter(|state| state.last_project.is_some())
 }
 
-/// Escritura atomica: se escribe un archivo temporal y se renombra, de modo que
-/// un cierre inesperado nunca deje una sesion a medias.
 fn write_session_to(path: &Path, state: &SessionState) -> Result<(), String> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| "No se pudo determinar la carpeta de la sesion.".to_string())?;
+    // La versión se fija aquí para que un archivo antiguo no impida guardar.
+    let mut state = state.clone();
+    state.version = SESSION_VERSION;
 
-    fs::create_dir_all(dir)
-        .map_err(|error| format!("No se pudo crear la carpeta de la sesion: {error}"))?;
-
-    let payload = serde_json::to_string_pretty(state)
-        .map_err(|error| format!("No se pudo preparar la sesion: {error}"))?;
-
-    let temporary = path.with_extension("json.tmp");
-
-    fs::write(&temporary, payload)
-        .map_err(|error| format!("No se pudo escribir la sesion: {error}"))?;
-
-    if let Err(error) = fs::rename(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return Err(format!("No se pudo guardar la sesion: {error}"));
-    }
-
-    Ok(())
+    jsonfile::write_json(path, &state)
 }
 
 fn remove_session_from(path: &Path) -> Result<(), String> {
-    if path.is_file() {
-        fs::remove_file(path)
-            .map_err(|error| format!("No se pudo borrar la sesion guardada: {error}"))?;
-    }
-
-    Ok(())
+    jsonfile::remove_json(path)
 }
 
 #[tauri::command]
@@ -125,10 +76,6 @@ pub fn load_session(app: AppHandle) -> Result<Option<SessionState>, String> {
 
 #[tauri::command]
 pub fn save_session(app: AppHandle, state: SessionState) -> Result<(), String> {
-    let mut state = state;
-    state.version = SESSION_VERSION;
-
-    // La version se fija aqui para que un archivo antiguo no impida guardar.
     write_session_to(&session_file(&app)?, &state)
 }
 
@@ -139,13 +86,12 @@ pub fn clear_session(app: AppHandle) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
-    fn temp_file(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("prisma_m14_session_{label}"));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir.join(SESSION_FILE)
+    fn temp_file(label: &str) -> std::path::PathBuf {
+        jsonfile::tests::temp_file(&format!("session_{label}"), SESSION_FILE)
     }
 
     fn sample() -> SessionState {
@@ -181,65 +127,7 @@ mod tests {
         assert!(raw.contains("mi-web"));
         assert!(raw.contains("\"version\": 1"));
 
-        let _ = fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn missing_or_empty_session_returns_none() {
-        let path = temp_file("missing");
-        assert_eq!(read_session_from(&path), None);
-
-        fs::write(&path, "   ").unwrap();
-        assert_eq!(read_session_from(&path), None);
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn corrupted_session_does_not_block_startup() {
-        let path = temp_file("corrupted");
-
-        fs::write(&path, "{ esto no es json").unwrap();
-        assert_eq!(read_session_from(&path), None);
-
-        // Un archivo con campos de otro formato tambien se descarta.
-        fs::write(&path, r#"{"otraCosa": 42}"#).unwrap();
-        assert_eq!(read_session_from(&path), None);
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn older_session_without_cursor_still_loads() {
-        let path = temp_file("legacy");
-
-        // Sesion escrita antes de que existiera el campo de la linea del cursor.
-        fs::write(
-            &path,
-            r#"{"version":1,"lastProject":"C:\\p","openTabs":[{"path":"C:\\p\\a.html","name":"a.html"}],"activePath":"C:\\p\\a.html"}"#,
-        )
-        .unwrap();
-
-        let state = read_session_from(&path).unwrap();
-        assert_eq!(state.open_tabs.len(), 1);
-        assert_eq!(state.open_tabs[0].line, 0);
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn writes_create_missing_directory() {
-        let path = std::env::temp_dir()
-            .join("prisma_m14_session_newdir")
-            .join("otra")
-            .join("carpeta")
-            .join(SESSION_FILE);
-        let _ = fs::remove_dir_all(path.parent().unwrap().parent().unwrap().parent().unwrap());
-
-        write_session_to(&path, &sample()).unwrap();
-        assert!(path.is_file());
-
-        let _ = fs::remove_dir_all(path.parent().unwrap().parent().unwrap().parent().unwrap());
+        jsonfile::tests::cleanup(&path);
     }
 
     #[test]
@@ -261,7 +149,64 @@ mod tests {
         // No debe quedar el archivo temporal por el camino.
         assert!(!path.with_extension("json.tmp").exists());
 
-        let _ = fs::remove_dir_all(path.parent().unwrap());
+        jsonfile::tests::cleanup(&path);
+    }
+
+    #[test]
+    fn missing_or_empty_session_returns_none() {
+        let path = temp_file("missing");
+        assert_eq!(read_session_from(&path), None);
+
+        fs::write(&path, "   ").unwrap();
+        assert_eq!(read_session_from(&path), None);
+
+        jsonfile::tests::cleanup(&path);
+    }
+
+    #[test]
+    fn corrupted_session_does_not_block_startup() {
+        let path = temp_file("corrupted");
+
+        fs::write(&path, "{ esto no es json").unwrap();
+        assert_eq!(read_session_from(&path), None);
+
+        // Un archivo con campos de otro formato tambien se descarta.
+        fs::write(&path, r#"{"otraCosa": 42}"#).unwrap();
+        assert_eq!(read_session_from(&path), None);
+
+        jsonfile::tests::cleanup(&path);
+    }
+
+    #[test]
+    fn session_without_project_is_treated_as_empty() {
+        let path = temp_file("noproject");
+
+        // Sin proyecto no hay nada que recuperar, aunque el archivo sea valido.
+        let mut state = sample();
+        state.last_project = None;
+        write_session_to(&path, &state).unwrap();
+
+        assert_eq!(read_session_from(&path), None);
+
+        jsonfile::tests::cleanup(&path);
+    }
+
+    #[test]
+    fn older_session_without_cursor_still_loads() {
+        let path = temp_file("legacy");
+
+        // Sesion escrita antes de que existiera el campo de la linea del cursor.
+        fs::write(
+            &path,
+            r#"{"version":1,"lastProject":"C:\\p","openTabs":[{"path":"C:\\p\\a.html","name":"a.html"}],"activePath":"C:\\p\\a.html"}"#,
+        )
+        .unwrap();
+
+        let state = read_session_from(&path).unwrap();
+        assert_eq!(state.open_tabs.len(), 1);
+        assert_eq!(state.open_tabs[0].line, 0);
+
+        jsonfile::tests::cleanup(&path);
     }
 
     #[test]
@@ -274,6 +219,6 @@ mod tests {
         assert!(!path.exists());
         remove_session_from(&path).unwrap();
 
-        let _ = fs::remove_dir_all(path.parent().unwrap());
+        jsonfile::tests::cleanup(&path);
     }
 }

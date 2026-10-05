@@ -78,6 +78,20 @@ src/
 │       └── SearchOverlay.tsx   # apertura rápida (Ctrl+P) y búsqueda (Ctrl+Shift+F)
 ├── editor/
 │   └── monacoEnvironment.ts    # workers de Monaco empaquetados por Vite
+├── designer/                   # M2.0.0: modelo visual interno, sin interfaz ni IO
+│   ├── types.ts                # PrismaNode, DesignDocument y contratos del modelo
+│   ├── identity.ts             # identidad interna `element-001`, propia de Prisma
+│   ├── tree.ts                 # construcción, jerarquía, orden, consultas y serialización
+│   ├── html.ts                 # etiquetas HTML conocidas, void, de texto plano y componentes
+│   ├── parse.ts                # lector mínimo de HTML y Blade
+│   ├── styles.ts               # modelos de hoja de estilo, regla, declaración y coincidencia
+│   ├── selector.ts             # selectores, especificidad y relación elemento/CSS
+│   ├── css.ts                  # lector mínimo de CSS
+│   ├── classify.ts             # clasificación de archivos y plan del proyecto
+│   ├── tree.test.ts            # pruebas del árbol, la identidad y los atributos
+│   ├── parse.test.ts           # pruebas del lector de HTML y Blade
+│   ├── styles.test.ts          # pruebas de CSS, selectores y coincidencias
+│   └── classify.test.ts        # pruebas de clasificación de archivos
 ├── hooks/
 │   ├── useProject.ts           # ciclo de vida del proyecto: crear, abrir, ejecutar, cerrar
 │   └── useWorkspace.ts         # búferes, pestañas, guardado, búsqueda y operaciones de archivos
@@ -123,7 +137,8 @@ aportan funcionalidad se registran en el historial de versiones sin abrir una ve
 | Módulo | Nombre | Estado |
 | ------ | ------ | ------ |
 | 0 | Base técnica | Completado |
-| 1 | Proyectos web | En desarrollo (`M1.0.0` a `M1.4.0` completadas) |
+| 1 | Proyectos web | En desarrollo (`M1.0.0` a `M1.5.0` completadas) |
+| 2 | Diseñador visual | En desarrollo (`M2.0.0` completada) |
 
 ## Historial de versiones
 
@@ -370,15 +385,101 @@ Corrección de `M1.3.0` incluida en esta versión:
   editor acepta `undefined` y `tsconfig.json` activa `noUncheckedIndexedAccess` para que el error
   no vuelva a aparecer por accesos fuera de rango.
 
+### M2.0.0 — Base del diseñador visual
+
+Alcance implementado:
+
+- **Un modelo interno, no una pantalla**
+  - Nuevo directorio `src/designer` con TypeScript puro: no importa React, no llama a Rust, no lee
+    ni escribe archivos. Es la representación sobre la que se podrá dibujar en M2.1.0.
+  - Los archivos del disco siguen siendo la única fuente de verdad. El modelo es una vista
+    intermedia que se puede reconstruir y volver a escribir sin perder nada.
+
+- **Identidad**
+  - Cada nodo recibe un identificador propio de Prisma, `element-001`, `element-002`, etc.
+  - Es independiente del `id` de HTML: un `id="loginButton"` del archivo no se confunde con el
+    identificador interno, y un elemento sin `id` también lo tiene.
+  - La identidad es estable: leer el mismo documento dos veces produce los mismos identificadores,
+    lo que permitirá reconocer un elemento entre dos análisis distintos.
+
+- **Jerarquía sin ciclos**
+  - Un nodo guarda `parentId` y su lista de `children`. No hay referencias de objetos en ambos
+    sentidos, así que el árbol se puede serializar y recorrer sin riesgo de bucles infinitos.
+  - El orden de los hijos es su posición en `children`. No hay un campo `order` que pueda
+    contradecirlo.
+  - Ayudas para lo que pedirá el lienzo: orden, ascendientes, búsqueda por etiqueta, por `id` de
+    HTML y por atributo.
+
+- **Qué es un nodo**
+  - `kind`: `element`, `text`, `comment`, `dynamic`, `directive` o `unknown`.
+  - `known`: `false` en cuanto hay algo que Prisma no reconoce, sin dejar de conservar el elemento.
+  - `origin`: archivo, línea y columna de origen.
+  - `source` y `closingSource`: el texto exacto de la apertura y del cierre. Es la garantía de que
+    el modelo no pierde nada: `serialize(leer(texto)) === texto` para los documentos que se pueden
+    reconstruir, incluidos los mal formados.
+
+- **Lector de HTML y Blade**
+  - Lee etiquetas, atributos con y sin comillas, texto, comentarios, contenido dinámico
+    (`{{ }}`, `{{{ }}}`), directivas Blade, bloques Blade con su cierre, componentes `<x-...>`,
+    el doctype y los comentarios `{{-- --}}`.
+  - `<script>` y `<style>` se conservan enteros y **no se interpretan**: un `<div>` dentro de un
+    string de JavaScript no se convierte en un elemento de la página.
+  - Lo que no se entiende se conserva: una etiqueta sin abrir, un cierre que sobra, un `<` de
+    comparación o un `<?php ?>` se guardan tal cual, sin inventar nada alrededor.
+  - Un HTML mal formado no descuadra el resto del documento: un elemento abierto sin cerrar se
+    cierra solo, como haría un navegador.
+  - El cierre de un bloque Blade se guarda en el bloque, igual que `</div>` se guarda en su
+    elemento, en lugar de aparecer entre los hijos.
+
+- **Modelo de estilos**
+  - `Stylesheet`, `CssRule`, `CssDeclaration` y `StyleMatch`: las hojas, reglas, declaraciones y
+    coincidencias se pueden consultar sin tocar el archivo.
+  - Se conserva el texto original de cada regla y se distinguen las declaraciones `!important`.
+  - Selectores de etiqueta, `#id`, `.clase`, `[atributo]`, `*`, pseudo-clases y los combinadores
+    descendiente, hijo, adyacente y hermano. Se calcula la especificidad de cada uno.
+  - Un selector con pseudo-clase se marca como `dynamic`: se reconoce y se guarda, pero un lienzo
+    estático no lo aplica, porque `:hover` no se puede representar.
+  - **No hay cascada**: se guardan las reglas que alcanzan a cada elemento y con qué
+    especificidad, pero no se resuelve cuál gana ni se puede editar CSS todavía.
+
+- **Clasificación de archivos**
+  - Un archivo se clasifica por su extensión en `markup` (`.html`, `.htm`, `.php`,
+    `.blade.php`), `style` (`.css`), `script` (`.js`, `.ts`, …) y `other`.
+  - Un archivo de proyecto se reparte en cuatro grupos. **JavaScript queda fuera del modelo
+    visual**: se clasifica aparte y no se mezcla con la estructura ni con la apariencia.
+
+Decisiones de alcance:
+
+- **No hay interfaz.** En M2.0.0 no existe lienzo, arrastrar y soltar, inspector, árbol visual,
+  selección, edición desde el lienzo ni generación de código. La versión entrega el modelo y sus
+  pruebas, que es lo que necesita la siguiente versión.
+- **No se toca Rust.** `language_for` en `src-tauri/src/projects.rs` sigue sin reconocer `.php`, así
+  que un archivo Blade se abre en Prisma como texto plano. Corresponde a M2.1.0.
+- **No se resuelve la cascada CSS** ni se edita el estilo de un elemento.
+- **No se añaden dependencias**: el modelo no incorpora ningún paquete. Las pruebas usan el runner
+  de Node que ya usa el proyecto.
+
+#### M2.1.0 — Alcance previsto
+
+Lo que queda para la siguiente versión, y que este modelo ya permite:
+
+- Reconocer `.php` y `.blade.php` en Rust para que se abran con resaltado.
+- Dibujar el árbol del modelo en el lienzo, con selección y correspondencia con el archivo.
+- Inspector de propiedades, con edición de atributos, textos y clases.
+- Leer los `<style>` incrustados y las hojas `.css` del proyecto y aplicar la cascada.
+- Decidir qué se hace con JavaScript en la vista: hoy se conserva el archivo y no se representa.
+
 ## Estado actual
 
 Funciona actualmente:
 
-- La aplicación arranca y muestra la pantalla inicial de Prisma.
+- La aplicación arranca y muestra la pantalla de bienvenida de Prisma.
 - **Crear proyecto web** funciona de extremo a extremo: permite escribir un nombre, elegir la
   carpeta de destino, genera físicamente la carpeta con los tres archivos, los enlaza
   correctamente y abre el proyecto creado en el workspace.
 - **Abrir proyecto** funciona: permite elegir una carpeta existente y muestra su árbol de archivos.
+- La pantalla de bienvenida es la única que se ve sin proyecto, y `Configuración` se abre desde
+  ella y también desde la cabecera del workspace.
 - El workspace muestra el árbol de archivos real del proyecto y permite seleccionar cada archivo.
 - El editor Monaco muestra el contenido real del archivo seleccionado con resaltado de sintaxis
   para HTML, CSS y JavaScript.
@@ -398,6 +499,54 @@ Funciona actualmente:
   con sus pestañas y devuelve el cursor a la línea aproximada donde estaba.
 - Los errores de creación, apertura, lectura, guardado, búsqueda, ejecución y recuperación se
   muestran en la interfaz en lugar de fallar en silencio.
+- Hay tres temas, `Claro`, `Oscuro` y `Neo`, aplicables a toda la aplicación y al propio editor de
+  código. El tema se aplica al instante y se recuerda en la siguiente ejecución.
+- El workspace muestra cuántos archivos están pendientes de guardar junto al nombre del proyecto.
+- Si un archivo cambia en el disco mientras Prisma está abierto, no se sobrescribe: se avisa y el
+  usuario decide.
+
+Comprobaciones realizadas al cerrar `M2.0.0`:
+
+- `npx tsc --noEmit` no informa de errores de tipos.
+- `npm test` ejecuta 183 pruebas del frontend con el runner integrado de Node, todas correctas. Las
+  123 de `src/designer` cubren el árbol y la identidad (51), el lector de HTML y Blade (48), el
+  modelo de estilos, los selectores y las coincidencias elemento/CSS (18) y la clasificación de
+  archivos (6). Las 60 anteriores de M1.5.0 siguen pasando.
+- `cargo test` en `src-tauri` da 33 pruebas, todas correctas: M2.0.0 no toca Rust.
+- `cargo clippy --all-targets` no informa de avisos.
+- `npm run build` (Vite) compila sin errores.
+
+Limitaciones conocidas de `M2.0.0`:
+
+- **El diseñador todavía no se ve.** Esta versión es el modelo y sus pruebas. No hay lienzo,
+  inspector, arrastrar y soltar, edición visual ni generación de código: nada de esto se ha
+  construido todavía.
+- El lector de HTML y Blade es mínimo a propósito. Cubre lo común y conserva lo que no entiende,
+  pero no implementa la especificación HTML: no hay `table`, no hay reglas de corrección de errores
+  del navegador, y el contenido de un `<template>` no se interpreta.
+- Un archivo `.php` o `.blade.php` sigue sin reconocerse en Rust, así que se abre como texto plano
+  en lugar de con su resaltado. El modelo sí los reconoce y los clasifica como marcado.
+- La cascada CSS no se resuelve. Se guardan las reglas que alcanzan a cada elemento y su
+  especificidad, pero no cuál gana, y no se puede editar el estilo de un elemento.
+- Los `<style>` incrustados en el HTML se conservan como texto y no se analizan. Solo se leen las
+  hojas `.css` como archivo.
+- El plan de un proyecto se calcula a partir de una lista de rutas. Todavía no se recorre un
+  proyecto real para decidir cuál es la entrada visual.
+- El modelo no se ha conectado al proyecto abierto: todavía no lee los archivos de un proyecto de
+  verdad, solo texto que se le pase.
+
+Comprobaciones realizadas al cerrar `M1.5.0`:
+
+- `npx tsc --noEmit` no informa de errores de tipos.
+- `npm test` ejecuta 60 pruebas del frontend con el runner integrado de Node, todas correctas: 33
+  de `src/workspace/state.test.ts` (pestañas, sesión y cambios externos) y 27 de
+  `src/theme/theme.test.ts` (temas, aplicación del atributo y tema de Monaco). Esta última incluye
+  una comprobación que lee `themes.css` y `editorTheme.css` y falla si a un tema le falta un token
+  o si algún estilo de componente escribe un color en lugar de usar un token.
+- `cargo test` en `src-tauri` da 33 pruebas, todas correctas: 15 de proyectos y archivos, 5 de
+  `jsonfile`, 6 de preferencias y 7 de sesión.
+- `cargo clippy --all-targets` no informa de avisos.
+- `npm run build` (Vite) compila sin errores.
 
 Comprobaciones realizadas al cerrar `M1.4.0`:
 
@@ -419,6 +568,21 @@ Limitaciones conocidas:
 - El flujo visual (diálogos, menú contextual, árbol, búsqueda, pestañas, ejecución y recuperación)
   **no se ha verificado de forma automatizada**: no existen pruebas de interfaz. La comprobación de
   la parte visual requiere una revisión manual.
+- El aspecto de los tres temas, y en concreto que el editor siga al tema sin recrearse, está
+  cubierto con pruebas sobre los tokens y la construcción del tema de Monaco, pero **no se ha
+  revisado todavía en la ventana real**. Es la comprobación manual pendiente más importante de
+  esta versión.
+- La persistencia de las preferencias tiene pruebas del comando de Rust, pero no se ha
+  comprobado el ciclo completo en la aplicación real: cambiar de tema, cerrar Prisma y volver a
+  arrancarlo.
+- `Neo` es un tema oscuro de alto contraste definido con tokens propios. No es un tema que se
+  pueda volver a generar desde la paleta de otro, ni tiene variantes.
+- El aviso de cambios externos compara el contenido byte a byte, así que un archivo retocado solo
+  en espacios en blanco o en el salto de línea final también se considera cambiado. No se mezclan
+  las dos versiones ni hay una pantalla de conflicto: Prisma no sobrescribe y avisa.
+- El árbol no se actualiza solo si los cambios se hacen desde otro programa mientras Prisma está
+  abierto. Ahora el guardado detecta el cambio y avisa, pero para verlos hay que reabrir el archivo
+  o el proyecto.
 - La persistencia de la sesión está cubierta con pruebas unitarias del comando de Rust, pero no
   se ha comprobado todavía el ciclo completo de la aplicación real: abrir Prisma, dejar pestañas,
   cerrar la ventana y volver a arrancarla.
@@ -426,8 +590,6 @@ Limitaciones conocidas:
   cambiar de pestaña se guarda de inmediato, así que no se pierden pestañas por cerrar la ventana
   justo después de abrirlas.
 - El árbol omite las entradas que empiezan por `.` y no supera 8 niveles de profundidad.
-- El árbol no se actualiza solo si los cambios se hacen desde otro programa mientras Prisma está
-  abierto: hay que volver a abrir el proyecto.
 - La búsqueda recorre los archivos reconocidos por el editor, con un máximo de 200 resultados, y no
   busca dentro de archivos de más de 2 MB.
 - Si el proyecto guardado ya no existe, la sesión se descarta y hay que elegir el proyecto de
@@ -595,3 +757,82 @@ Estos objetivos son únicamente los conocidos. No se ha definido ni implementado
   `noUncheckedIndexedAccess`.
 - Regenerados los iconos de la aplicación desde `prisma.ico`, ya con la marca de Prisma, y
   eliminado el logo de la plantilla de Tauri de la interfaz.
+
+#### M1.5.0 — Consolidación, experiencia inicial y personalización
+
+- Nuevo módulo `src-tauri/src/preferences.rs` con los comandos `load_preferences` y
+  `save_preferences`. Guarda las preferencias en `preferences.json`, dentro de la carpeta de
+  configuración de la aplicación, nunca dentro de un proyecto. La escritura es atómica y un
+  archivo ausente, ilegible o con un tema desconocido se descarta sin impedir el arranque.
+- Nuevo módulo `src-tauri/src/jsonfile.rs` con la lectura, escritura atómica y borrado de archivos
+  json. `session.rs` y `preferences.rs` lo reutilizan en lugar de mantener dos copias de la
+  escritura a disco.
+- Nuevo `src/types/preferences.ts` con `ThemeName`, la lista `THEMES` y `resolveTheme`, que
+  garantiza que solo se apliquen los tres temas conocidos. El tema predeterminado es el claro.
+- Nuevo `src/theme/applyTheme.ts`: el tema activo se marca con `data-theme` en el elemento raíz.
+  Las funciones reciben el elemento sobre el que trabajan, así que se pueden probar sin montar una
+  ventana.
+- Nuevo `src/styles/themes.css` con los tokens de los tres temas: claro, oscuro y neo. Ningún
+  componente escribe ya un color propio; todos usan `var(--...)`.
+- Nuevo `src/styles/editorTheme.css` con los tokens del editor. Monaco no lee variables css, así que
+  `src/editor/editorTheme.ts` construye su tema con esos tokens y lo vuelve a registrar al cambiar
+  de tema, sin recrear el editor: no se pierde el cursor, el desplazamiento ni lo que no se ha
+  guardado.
+- `color-scheme` en cada tema para que las barras de desplazamiento y los campos de formulario
+  sigan al tema sin estilarlos uno a uno.
+- `StartScreen` pasa a llamarse `WelcomeScreen` y añade un acceso a `Configuración`.
+- Nueva pantalla `SettingsScreen`, alcanzable desde la bienvenida y desde la cabecera del
+  workspace, con la sección de apariencia y un tema por opción con su muestra de color. Si una
+  preferencia no se puede leer o guardar, se avisa en la propia pantalla en vez de fallar en
+  silencio.
+- `App` decide entre bienvenida, ajustes y workspace, y muestra los ajustes como una capa sobre el
+  proyecto cuando hay uno abierto.
+- `usePreferences` carga el tema al arrancar, lo aplica antes de que haya proyecto para que la
+  bienvenida ya salga con el tema elegido, y lo guarda en cuanto el usuario lo cambia.
+- El workspace muestra un contador de archivos pendientes de guardar junto al nombre del proyecto.
+- `requestCloseProject` vuelve a usar `hasUnsavedChanges` del hook, que ya lleva la cuenta, en lugar
+  de recorrer otra vez los búferes.
+- Nuevo `externalChangeMessage` en `src/workspace/state.ts`. Antes de escribir, `useWorkspace`
+  compara el archivo con lo que había en el disco cuando se abrió: si ha cambiado por fuera, no se
+  sobrescribe y se avisa, porque perder el trabajo de otra persona no es un precio aceptable por
+  guardar una pulsación antes.
+- Nuevo `src/theme/theme.test.ts` con 27 pruebas: los tres temas y sus nombres, el valor
+  predeterminado, el rechazo de cualquier otro valor, la aplicación y lectura del atributo, la
+  construcción del tema de Monaco y la cobertura de tokens. Incluye una comprobación que lee
+  `themes.css` y `editorTheme.css` y falla si a un tema le falta un token o si algún estilo de
+  componente vuelve a escribir un color suelto.
+- `src/workspace/state.test.ts` ampliado con 4 pruebas de `externalChangeMessage`.
+- `src/types/node-test.d.ts` ampliado con `notEqual`, `match` y `node:fs`, que usan las pruebas
+  nuevas, manteniendo la promesa de no añadir `@types/node`.
+
+### Módulo 2 — Diseñador visual
+
+#### M2.0.0 — Base del diseñador visual
+
+- Nuevo directorio `src/designer` con el modelo visual interno. TypeScript puro, sin React, sin
+  Rust y sin acceso al sistema de archivos.
+- `types.ts` con `PrismaNode`, `DesignDocument` y los contratos del modelo. Cada nodo guarda su
+  `kind`, si Prisma lo reconoce o no (`known`), su origen y el texto exacto de apertura y cierre
+  (`source` y `closingSource`).
+- `identity.ts` con identificadores propios de Prisma (`element-001`), independientes del `id` de
+  HTML y estables entre lecturas.
+- `tree.ts` con la construcción del árbol, el orden, los ascendientes, las consultas por etiqueta,
+  por `id` de HTML y por atributo, y la serialización. La jerarquía usa `parentId` más `children`,
+  sin ciclos, y el orden es la posición en `children`.
+- `html.ts` con el catálogo de etiquetas conocidas, las void, las de texto plano y de contenido no
+  visual, y la detección de componentes Blade.
+- `parse.ts` con un lector mínimo de HTML y Blade: etiquetas, atributos, texto, comentarios,
+  contenido dinámico, directivas, bloques con su cierre, componentes, doctype y raw. Lo que no
+  reconoce se conserva sin inventar nada, y un documento mal formado no descuadra el árbol.
+- `styles.ts`, `selector.ts` y `css.ts` con el modelo de hojas, reglas, declaraciones,
+  especificidad, selectores y las coincidencias elemento/CSS. Se marcan como `dynamic` los
+  selectores con pseudo-clase, porque un lienzo estático no puede representarlos. No se resuelve la
+  cascada.
+- `classify.ts` con la clasificación de archivos por extensión y el reparto de un proyecto en
+  marcado, estilo, script y otros. JavaScript se clasifica aparte y queda fuera del modelo visual.
+- 123 pruebas nuevas en cuatro archivos: `tree.test.ts` (51), `parse.test.ts` (48),
+  `styles.test.ts` (18) y `classify.test.ts` (6). Entre ellas hay una comprobación de fidelidad por
+  documento: el texto reconstruido tiene que ser idéntico al original, incluidos los casos mal
+  formados, sin cerrar y con etiquetas desconocidas.
+- `src/types/node-test.d.ts` ampliado con `ok` y `node:assert/strict`, que usan las pruebas nuevas.
+- Sin dependencias nuevas, sin cambios en Rust y sin cambios en la interfaz.

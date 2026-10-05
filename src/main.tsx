@@ -4,6 +4,8 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import ErrorBoundary from "./components/ui/ErrorBoundary";
 import "./styles/global.css";
+import "./styles/themes.css";
+import "./styles/editorTheme.css";
 import "./styles/ui.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

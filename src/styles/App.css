@@ -2,3 +2,16 @@
   min-height: 100%;
   background-color: var(--color-bg);
 }
+
+/*
+ * Capa para una pantalla completa sobre otra, como los ajustes abiertos desde un
+ * proyecto. Cubre la ventana, deja el fondo del tema visible y no deja pasar el
+ * ratón al editor que queda debajo.
+ */
+.app-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  overflow-y: auto;
+  background-color: var(--color-bg);
+}

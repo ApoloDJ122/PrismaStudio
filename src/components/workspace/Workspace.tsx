@@ -4,6 +4,7 @@ import prismaLogo from "../../assets/prisma-logo.png";
 import { useWorkspace } from "../../hooks/useWorkspace";
 import type { ProjectState } from "../../hooks/useProject";
 import type { ProjectNode } from "../../types/project";
+import type { ThemeName } from "../../types/preferences";
 import CloseProjectDialog from "../ui/CloseProjectDialog";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import Modal from "../ui/Modal";
@@ -31,7 +32,15 @@ function relativeFolder(root: ProjectNode, folderPath: string): string {
   return folderPath.replace(root.path, "").replace(/^[\\/]+/, "");
 }
 
-function Workspace({ projectState }: { projectState: ProjectState }) {
+function Workspace({
+  projectState,
+  theme,
+  onOpenSettings,
+}: {
+  projectState: ProjectState;
+  theme: ThemeName;
+  onOpenSettings: () => void;
+}) {
   const {
     project,
     error: projectError,
@@ -43,7 +52,6 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
     clearError: clearProjectError,
   } = projectState;
   const {
-    buffers,
     openTabs,
     activeTabIndex,
     activeTab,
@@ -189,20 +197,16 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
     [closeDialog, createEntry, deleteEntry, dialog, project, renameEntry],
   );
 
+  // `hasUnsavedChanges` viene del hook, que ya lleva la cuenta de los búferes
+  // pendientes. No se vuelve a recorrer los buffers aquí.
   const requestCloseProject = useCallback(() => {
-    // Verificar si alguna pestaña tiene cambios sin guardar
-    const dirtyTabs = openTabs.filter((tab) => {
-      const buffer = buffers[tab.path];
-      return buffer !== undefined && buffer.content !== buffer.savedContent;
-    });
-
-    if (dirtyTabs.length > 0) {
+    if (hasUnsavedChanges) {
       setDialog({ type: "close-project" });
       return;
     }
 
     closeProject();
-  }, [closeProject, openTabs, buffers]);
+  }, [closeProject, hasUnsavedChanges]);
 
   /*
    * M1.4.0 - Ejecución.
@@ -381,7 +385,21 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
       <header className="workspace__header">
         <div className="workspace__identity">
           <img className="workspace__logo" src={prismaLogo} alt="" width={22} height={22} />
-          <span className="workspace__name">{project.name}</span>
+          <span className="workspace__name">
+            {project.name}
+            {dirtyPaths.size > 0 && (
+              <span
+                className="workspace__dirtyBadge"
+                title={`${dirtyPaths.size} ${
+                  dirtyPaths.size === 1
+                    ? "archivo con cambios sin guardar"
+                    : "archivos con cambios sin guardar"
+                }`}
+              >
+                {dirtyPaths.size}
+              </span>
+            )}
+          </span>
           <span className="workspace__path" title={project.path}>
             {project.path}
           </span>
@@ -417,8 +435,21 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
           >
             {projectBusy ? "Abriendo..." : "Ejecutar"}
           </button>
-          <button type="button" className="button button--ghost" onClick={requestCloseProject}>
-            Cerrar
+          <button
+            type="button"
+            className="button button--ghost"
+            title="Cambiar de proyecto"
+            onClick={requestCloseProject}
+          >
+            Cerrar proyecto
+          </button>
+          <button
+            type="button"
+            className="button button--ghost"
+            title="Ajustes de la aplicación"
+            onClick={onOpenSettings}
+          >
+            Ajustes
           </button>
         </div>
       </header>
@@ -528,6 +559,7 @@ function Workspace({ projectState }: { projectState: ProjectState }) {
             language={activeTab?.language ?? "plaintext"}
             content={activeBuffer?.content ?? ""}
             revealLine={reveal !== null && reveal.path === activeTab?.path ? reveal.line : null}
+            theme={theme}
             apiRef={editorApiRef}
             onChange={updateContent}
             onRevealHandled={clearReveal}

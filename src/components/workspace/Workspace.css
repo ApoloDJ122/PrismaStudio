@@ -12,7 +12,7 @@
   gap: 16px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--color-border);
-  background-color: var(--color-surface);
+  background-color: var(--color-header-bg);
 }
 
 .workspace__identity {
@@ -31,8 +31,26 @@
 }
 
 .workspace__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 14px;
   font-weight: 600;
+}
+
+/* Contador de archivos pendientes de guardar, junto al nombre del proyecto. */
+.workspace__dirtyBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background-color: var(--color-warning);
+  color: var(--color-bg);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .workspace__path {
@@ -60,7 +78,7 @@
   grid-template-rows: auto 1fr auto;
   min-height: 0;
   border-right: 1px solid var(--color-border);
-  background-color: var(--color-surface);
+  background-color: var(--color-sidebar-bg);
 }
 
 .workspace__sidebarHead {
@@ -123,7 +141,7 @@
   gap: 2px;
   padding: 6px 10px 0;
   border-bottom: 1px solid var(--color-border);
-  background-color: var(--color-surface);
+  background-color: var(--color-tabbar-bg);
   overflow-x: auto;
 }
 
@@ -150,8 +168,8 @@
 .workspace__tab--active {
   color: var(--color-text);
   font-weight: 600;
-  background-color: var(--color-bg);
-  border-color: var(--color-border);
+  background-color: var(--color-tab-active-bg);
+  border-color: var(--color-tab-active-border);
 }
 
 .workspace__tab:focus-visible {
@@ -194,7 +212,7 @@
   gap: 20px;
   padding: 4px 14px;
   border-top: 1px solid var(--color-border);
-  background-color: var(--color-surface);
+  background-color: var(--color-statusbar-bg);
   font-size: 11px;
   color: var(--color-text-muted);
 }
@@ -307,10 +325,10 @@
   gap: 12px;
   max-width: 70vw;
   padding: 8px 10px 8px 14px;
-  border: 1px solid #8c2f2f;
+  border: 1px solid var(--color-danger-border);
   border-radius: var(--radius-sm);
-  background-color: #2a1618;
-  color: #f3d9d9;
+  background-color: var(--color-danger-soft);
+  color: var(--color-danger-text);
   font-size: 12px;
   transform: translateX(-50%);
 }
@@ -346,11 +364,11 @@
 }
 
 .tree__row--highlighted {
-  background-color: rgba(0, 0, 0, 0.04);
+  background-color: var(--color-bg-hover);
 }
 
 .tree__row--active {
-  background-color: #e8effc;
+  background-color: var(--color-accent-soft);
   color: var(--color-accent);
   font-weight: 500;
 }
@@ -386,7 +404,7 @@
 }
 
 .tree__dirty {
-  color: #8a6116;
+  color: var(--color-warning);
   font-weight: 700;
 }
 
@@ -408,7 +426,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background-color: var(--color-surface);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 8px 24px var(--color-shadow);
 }
 
 .menu__item {
@@ -428,7 +446,7 @@
 }
 
 .menu__item--danger {
-  color: #a33;
+  color: var(--color-danger);
 }
 
 /* Editor */
@@ -472,7 +490,7 @@
   display: flex;
   justify-content: center;
   padding-top: 12vh;
-  background-color: rgba(0, 0, 0, 0.35);
+  background-color: var(--color-overlay);
 }
 
 .palette__panel {
@@ -484,7 +502,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md, 8px);
   background-color: var(--color-surface);
-  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 20px 48px var(--color-shadow);
 }
 
 .palette__input {
@@ -525,7 +543,7 @@
 }
 
 .palette__item--active {
-  background-color: #e8effc;
+  background-color: var(--color-accent-soft);
 }
 
 .palette__title {

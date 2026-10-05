@@ -1,0 +1,160 @@
+/*
+ * M1.5.0 - Temas de Prisma.
+ *
+ * Cada tema es un conjunto de tokens (variables CSS) y nada mas. Los componentes
+ * nunca escriben un color suelto: todos usan `var(--...)`. Cambiar el diseno
+ * completo de Prisma es, por tanto, cambiar este archivo.
+ *
+ * Para anadir un tema nuevo hay que:
+ *   1. Anadir el nombre en `src/types/preferences.ts` (ThemeName).
+ *   2. Anadir el mismo nombre en `THEMES` de `src-tauri/src/preferences.rs`.
+ *   3. Anadir aqui un bloque `[data-theme="..."]` con TODOS los tokens.
+ * El test `src/theme/theme.test.ts` avisa si falta algun token.
+ *
+ * `color-scheme` hace que las barras de desplazamiento, los campos de formulario
+ * y los menus del sistema tambien pertenezcan al tema, sin tener que estilarlos
+ * uno a uno. El tema claro es el que se aplica por defecto, asi que tambien
+ * cubre el arranque antes de que React escriba el atributo.
+ */
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Superficies */
+  --color-bg: #f2f4f7;
+  --color-bg-hover: #e8ebf0;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f7f8fa;
+  --color-surface-sunken: #eceff3;
+
+  /* Bordes */
+  --color-border: #dde1e8;
+  --color-border-strong: #c3c9d3;
+
+  /* Texto */
+  --color-text: #1a1e25;
+  --color-text-muted: #5b6472;
+  --color-text-subtle: #7d8794;
+
+  /* Acento */
+  --color-accent: #2f6feb;
+  --color-accent-hover: #2759c9;
+  --color-accent-contrast: #ffffff;
+  --color-accent-soft: #dfe9fd;
+  --color-accent-border: #b9d0f8;
+
+  /* Peligro y avisos */
+  --color-danger: #b23a34;
+  --color-danger-hover: #99302b;
+  --color-danger-contrast: #ffffff;
+  --color-danger-soft: #fdeeee;
+  --color-danger-border: #edc0bd;
+  --color-danger-text: #8c2f2f;
+  --color-warning: #8a5a12;
+
+  /* Interaccion */
+  --color-focus: #2f6feb;
+  --color-selection: #cfdefb;
+  --color-overlay: rgba(20, 26, 36, 0.42);
+  --color-shadow: rgba(19, 26, 38, 0.16);
+  --color-scrollbar: #c3c9d3;
+
+  /* Partes concretas del workspace */
+  --color-header-bg: #ffffff;
+  --color-tabbar-bg: #f7f8fa;
+  --color-tab-active-bg: #ffffff;
+  --color-tab-active-border: #dde1e8;
+  --color-statusbar-bg: #f7f8fa;
+  --color-sidebar-bg: #f7f8fa;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-bg: #171a1f;
+  --color-bg-hover: #22262d;
+  --color-surface: #1e2228;
+  --color-surface-muted: #242931;
+  --color-surface-sunken: #14171b;
+
+  --color-border: #2e343d;
+  --color-border-strong: #3f4650;
+
+  --color-text: #e3e7ee;
+  --color-text-muted: #a2abb9;
+  --color-text-subtle: #838d9c;
+
+  --color-accent: #5b8def;
+  --color-accent-hover: #6f9bf2;
+  --color-accent-contrast: #0d1117;
+  --color-accent-soft: #1f2a40;
+  --color-accent-border: #33456a;
+
+  --color-danger: #d2635c;
+  --color-danger-hover: #dc756e;
+  --color-danger-contrast: #1a0f0e;
+  --color-danger-soft: #2a1a1a;
+  --color-danger-border: #4d2b2a;
+  --color-danger-text: #e79a94;
+  --color-warning: #d3a95c;
+
+  --color-focus: #6f9bf2;
+  --color-selection: #2c3d5e;
+  --color-overlay: rgba(6, 8, 12, 0.6);
+  --color-shadow: rgba(0, 0, 0, 0.5);
+  --color-scrollbar: #3f4650;
+
+  --color-header-bg: #1e2228;
+  --color-tabbar-bg: #1a1e23;
+  --color-tab-active-bg: #242931;
+  --color-tab-active-border: #2e343d;
+  --color-statusbar-bg: #1a1e23;
+  --color-sidebar-bg: #1a1e23;
+}
+
+[data-theme="neo"] {
+  color-scheme: dark;
+
+  /* Base azul profunda con superficies algo mas claras: la profundidad viene de
+     capas planas y bordes nitidos, no de sombras ni de degradados. */
+  --color-bg: #0d0f15;
+  --color-bg-hover: #171b25;
+  --color-surface: #151924;
+  --color-surface-muted: #1b2030;
+  --color-surface-sunken: #0a0c11;
+
+  --color-border: #262c3d;
+  --color-border-strong: #39415a;
+
+  --color-text: #e9ecf6;
+  --color-text-muted: #9ba3bd;
+  --color-text-subtle: #7c8399;
+
+  /* Acento violeta: identidad cromatica propia de Prisma. */
+  --color-accent: #8b7bf5;
+  --color-accent-hover: #9c8df8;
+  --color-accent-contrast: #0d0f15;
+  --color-accent-soft: #1e1c38;
+  --color-accent-border: #3a3565;
+
+  --color-danger: #e0685f;
+  --color-danger-hover: #e77d75;
+  --color-danger-contrast: #0d0f15;
+  --color-danger-soft: #2a1620;
+  --color-danger-border: #4b2733;
+  --color-danger-text: #f0908a;
+  --color-warning: #dfa45c;
+
+  --color-focus: #9c8df8;
+  --color-selection: #2b2750;
+  --color-overlay: rgba(4, 5, 9, 0.66);
+  --color-shadow: rgba(0, 0, 0, 0.55);
+  --color-scrollbar: #39415a;
+
+  --color-header-bg: #151924;
+  --color-tabbar-bg: #11151d;
+  --color-tab-active-bg: #1b2030;
+  --color-tab-active-border: #262c3d;
+  --color-statusbar-bg: #11151d;
+  --color-sidebar-bg: #11151d;
+}

@@ -14,6 +14,7 @@ import type { FileBuffer, ProjectNode, SearchMatch } from "../types/project";
 import type { SessionState } from "../types/session";
 import {
   buildSessionState,
+  externalChangeMessage,
   findNodeByPath,
   isSamePathOrInside,
   nextActiveIndex,
@@ -244,6 +245,31 @@ export function useWorkspace(projectState: ProjectState) {
 
       if (current === null || buffer === undefined || buffer.content === buffer.savedContent) {
         return null;
+      }
+
+      /*
+       * M1.5.0 - Cambios externos.
+       *
+       * Antes de escribir se comprueba que el archivo siga igual que cuando se
+       * abrió. Si otra persona o programa lo ha tocado, no se sobrescribe: se
+       * avisa, porque perder el trabajo de fuera no es un precio aceptable por
+       * guardar una pulsación antes. Si el archivo ya no se puede leer, se
+       * intenta guardar igualmente y es Rust quien informa del problema real.
+       */
+      try {
+        const onDisk = await readProjectFile(path, current.path);
+        const conflict = externalChangeMessage({
+          name: buffer.name,
+          loaded: buffer.savedContent,
+          onDisk: onDisk.content,
+        });
+
+        if (conflict !== null) {
+          reportError(conflict);
+          return conflict;
+        }
+      } catch {
+        // Sin lectura no se puede comparar. Se deja que la escritura falle sola.
       }
 
       try {

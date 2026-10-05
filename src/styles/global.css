@@ -1,14 +1,12 @@
-:root {
-  --color-bg: #f3f4f6;
-  --color-surface: #ffffff;
-  --color-border: #dfe2e8;
-  --color-border-strong: #c7ccd4;
-  --color-text: #1b1f26;
-  --color-text-muted: #5c6470;
-  --color-accent: #2f6feb;
-  --color-accent-hover: #2a62d4;
-  --color-accent-contrast: #ffffff;
+/*
+ * Estructura y estilos compartidos de Prisma.
+ *
+ * Aquí no hay ningún color: los colores viven en `themes.css` y en
+ * `editorTheme.css`, como tokens. Este archivo solo define la base tipográfica,
+ * el tamaño de las piezas y el comportamiento común de los botones.
+ */
 
+:root {
   --radius-sm: 6px;
   --radius-md: 10px;
 
@@ -40,6 +38,8 @@ body,
 
 body {
   margin: 0;
+  background-color: var(--color-bg);
+  color: var(--color-text);
 }
 
 h1,
@@ -54,8 +54,18 @@ button {
 }
 
 button:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
+}
+
+/* Barra de desplazamiento discreta, del color del tema activo. */
+* {
+  scrollbar-color: var(--color-scrollbar) transparent;
+  scrollbar-width: thin;
+}
+
+::selection {
+  background-color: var(--color-selection);
 }
 
 .button {
@@ -66,6 +76,8 @@ button:focus-visible {
   padding: 9px 16px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--color-border-strong);
+  background-color: var(--color-surface);
+  color: var(--color-text);
   font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
@@ -82,14 +94,9 @@ button:focus-visible {
   border-color: var(--color-accent-hover);
 }
 
-.button--secondary {
-  background-color: var(--color-surface);
-  color: var(--color-text);
-}
-
 .button--secondary:hover:not(:disabled) {
-  background-color: var(--color-bg);
-  border-color: var(--color-accent);
+  background-color: var(--color-bg-hover);
+  border-color: var(--color-accent-border);
 }
 
 .button:disabled {
@@ -104,19 +111,19 @@ button:focus-visible {
 }
 
 .button--ghost:hover:not(:disabled) {
-  background-color: var(--color-bg);
+  background-color: var(--color-bg-hover);
   color: var(--color-text);
 }
 
 .button--danger {
-  background-color: #b3403a;
-  border-color: #b3403a;
-  color: #ffffff;
+  background-color: var(--color-danger);
+  border-color: var(--color-danger);
+  color: var(--color-danger-contrast);
 }
 
 .button--danger:hover:not(:disabled) {
-  background-color: #9c3630;
-  border-color: #9c3630;
+  background-color: var(--color-danger-hover);
+  border-color: var(--color-danger-hover);
 }
 
 .button--small {

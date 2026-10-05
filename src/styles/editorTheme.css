@@ -1,0 +1,90 @@
+/*
+ * M1.5.0 - Colores del editor de codigo.
+ *
+ * Monaco no entiende variables CSS, asi que aqui se declara, para cada tema, el
+ * mismo conjunto de colores que necesita el editor. `src/editor/editorTheme.ts`
+ * los lee de aqui y construye el tema de Monaco, de modo que el editor y el resto
+ * de la interfaz siguen teniendo una unica fuente de verdad: este archivo y
+ * `themes.css`.
+ *
+ * Estos tokens NO dependen del tema activo: viven en el elemento raiz, junto a
+ * `[data-theme]`, y cambian con el.
+ */
+
+:root {
+  --editor-bg: #ffffff;
+  --editor-fg: #1a1e25;
+  --editor-line-highlight: #f4f6fa;
+  --editor-selection: #cfdefb;
+  --editor-inactive-selection: #dfe7f6;
+  --editor-cursor: #1a1e25;
+  --editor-line-number: #a6aebc;
+  --editor-line-number-active: #4a5260;
+  --editor-indent-guide: #e2e6ec;
+  --editor-bracket-match: #c3c9d3;
+  --editor-widget-bg: #ffffff;
+  --editor-widget-border: #c3c9d3;
+  --editor-ruler: #e2e6ec;
+
+  --token-comment: #6d7583;
+  --token-keyword: #a626a4;
+  --token-string: #2f7d4f;
+  --token-number: #b5560f;
+  --token-tag: #c0392b;
+  --token-attribute: #b5560f;
+  --token-property: #1f6f8b;
+  --token-punctuation: #6b7280;
+  --token-type: #8a5a12;
+}
+
+[data-theme="dark"] {
+  --editor-bg: #1e2228;
+  --editor-fg: #e3e7ee;
+  --editor-line-highlight: #262b33;
+  --editor-selection: #2c3d5e;
+  --editor-inactive-selection: #262f42;
+  --editor-cursor: #e3e7ee;
+  --editor-line-number: #5a6270;
+  --editor-line-number-active: #a2abb9;
+  --editor-indent-guide: #2b313a;
+  --editor-bracket-match: #3f4650;
+  --editor-widget-bg: #242931;
+  --editor-widget-border: #3f4650;
+  --editor-ruler: #2b313a;
+
+  --token-comment: #6d7683;
+  --token-keyword: #c678dd;
+  --token-string: #98c379;
+  --token-number: #d19a66;
+  --token-tag: #e06c75;
+  --token-attribute: #d19a66;
+  --token-property: #56b6c2;
+  --token-punctuation: #8b95a4;
+  --token-type: #e5c07b;
+}
+
+[data-theme="neo"] {
+  --editor-bg: #0d0f15;
+  --editor-fg: #e9ecf6;
+  --editor-line-highlight: #171b25;
+  --editor-selection: #2b2750;
+  --editor-inactive-selection: #232040;
+  --editor-cursor: #c7bcff;
+  --editor-line-number: #4b5268;
+  --editor-line-number-active: #9ba3bd;
+  --editor-indent-guide: #1e2331;
+  --editor-bracket-match: #39415a;
+  --editor-widget-bg: #1b2030;
+  --editor-widget-border: #39415a;
+  --editor-ruler: #1e2331;
+
+  --token-comment: #626a80;
+  --token-keyword: #b39bfb;
+  --token-string: #6fd6a8;
+  --token-number: #f0a97a;
+  --token-tag: #f27e88;
+  --token-attribute: #f0a97a;
+  --token-property: #5cc8d8;
+  --token-punctuation: #7c8399;
+  --token-type: #e8c07d;
+}
