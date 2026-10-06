@@ -71,6 +71,29 @@ export function isNonVisualTag(tag: string): boolean {
 }
 
 /**
+ * `true` si por dentro puede alojar otros elementos del diseño.
+ *
+ * Lo usan el lienzo y el árbol para decidir donde se puede soltar algo: un
+ * `<img>` no tiene interior, un `<style>` solo admite texto, y `head` o `html`
+ * no son superficies de diseño aunque tecnicamente contengan nodos. Las
+ * etiquetas propias del proyecto (desconocidas o componentes Blade) cuentan
+ * como contenedores: se ven y se puede trabajar dentro de ellas.
+ */
+export function isContainerTag(tag: string): boolean {
+  const name = tag.toLowerCase();
+
+  if (isVoidTag(name) || isRawTextTag(name) || isNonVisualTag(name)) {
+    return false;
+  }
+
+  if (name === "head" || name === "html") {
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * `true` si el nombre parece el de un componente Blade, como `x-alerta`.
  *
  * No se descarta: se conserva como elemento con su contenido, marcado como no

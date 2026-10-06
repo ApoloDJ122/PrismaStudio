@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import prismaLogo from "../../assets/prisma-logo.png";
+import { useAnalysis } from "../../hooks/useAnalysis";
 import { useWorkspace } from "../../hooks/useWorkspace";
 import type { ProjectState } from "../../hooks/useProject";
 import type { ProjectNode } from "../../types/project";
@@ -9,6 +10,7 @@ import CloseProjectDialog from "../ui/CloseProjectDialog";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import Modal from "../ui/Modal";
 import PromptDialog from "../ui/PromptDialog";
+import AnalysisPanel from "./AnalysisPanel";
 import CodeEditor, { type CodeEditorApi } from "./CodeEditor";
 import FileTree, { type TreeCommand } from "./FileTree";
 import SearchOverlay, { type PaletteMode } from "./SearchOverlay";
@@ -90,6 +92,11 @@ function Workspace({
   const [dialog, setDialog] = useState<Dialog>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [palette, setPalette] = useState<PaletteMode | null>(null);
+
+  // M2.1.0 - Analisis de solo lectura del proyecto abierto.
+  const analysis = useAnalysis(project);
+  const [sidebarMode, setSidebarMode] = useState<"files" | "analysis">("files");
+
   const editorApiRef = useRef<CodeEditorApi | null>(null);
 
   const searchInActiveFile = useCallback(() => {
@@ -457,53 +464,104 @@ function Workspace({
       <div className="workspace__body">
         <aside className="workspace__sidebar">
           <div className="workspace__sidebarHead">
-            <span className="workspace__sidebarTitle">Archivos</span>
+            <div className="workspace__sidebarTabs" role="tablist" aria-label="Panel lateral">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidebarMode === "files"}
+                className={`workspace__sidebarTab ${
+                  sidebarMode === "files" ? "workspace__sidebarTab--active" : ""
+                }`}
+                onClick={() => setSidebarMode("files")}
+              >
+                Archivos
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidebarMode === "analysis"}
+                className={`workspace__sidebarTab ${
+                  sidebarMode === "analysis" ? "workspace__sidebarTab--active" : ""
+                }`}
+                onClick={() => setSidebarMode("analysis")}
+              >
+                Analisis
+              </button>
+            </div>
+
             <div className="workspace__sidebarActions">
-              <button
-                type="button"
-                className="button button--ghost button--small"
-                title="Nuevo archivo"
-                onClick={() => {
-                  setDialog({ type: "new-file", parentPath: root.path });
-                  setDialogError(null);
-                }}
-              >
-                + Archivo
-              </button>
-              <button
-                type="button"
-                className="button button--ghost button--small"
-                title="Nueva carpeta"
-                onClick={() => {
-                  setDialog({ type: "new-folder", parentPath: root.path });
-                  setDialogError(null);
-                }}
-              >
-                + Carpeta
-              </button>
+              {sidebarMode === "files" ? (
+                <>
+                  <button
+                    type="button"
+                    className="button button--ghost button--small"
+                    title="Nuevo archivo"
+                    onClick={() => {
+                      setDialog({ type: "new-file", parentPath: root.path });
+                      setDialogError(null);
+                    }}
+                  >
+                    + Archivo
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--ghost button--small"
+                    title="Nueva carpeta"
+                    onClick={() => {
+                      setDialog({ type: "new-folder", parentPath: root.path });
+                      setDialogError(null);
+                    }}
+                  >
+                    + Carpeta
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="button button--ghost button--small"
+                  title="Volver a recorrer el proyecto"
+                  disabled={analysis.isBusy}
+                  onClick={analysis.reanalyze}
+                >
+                  {analysis.isBusy ? "Analizando..." : "Reanalizar"}
+                </button>
+              )}
             </div>
           </div>
 
-          <FileTree
-            tree={root}
-            activePath={activePath}
-            dirtyPaths={[...dirtyPaths]}
-            onCommand={handleCommand}
-          />
+          {sidebarMode === "files" ? (
+            <>
+              <FileTree
+                tree={root}
+                activePath={activePath}
+                dirtyPaths={[...dirtyPaths]}
+                onCommand={handleCommand}
+              />
 
-          <div className="workspace__search">
-            <input
-              className="workspace__searchInput"
-              type="search"
-              placeholder="Buscar en el proyecto (Ctrl+Shift+F)"
-              value={query}
-              onChange={(event) => {
-                setQuery(event.currentTarget.value);
-                setPalette(event.currentTarget.value.trim() === "" ? null : "search");
-              }}
+              <div className="workspace__search">
+                <input
+                  className="workspace__searchInput"
+                  type="search"
+                  placeholder="Buscar en el proyecto (Ctrl+Shift+F)"
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.currentTarget.value);
+                    setPalette(event.currentTarget.value.trim() === "" ? null : "search");
+                  }}
+                />
+                {isSearching && <span className="workspace__searchState">Buscando...</span>}
+              </div>
+            </>
+          ) : (
+            <AnalysisPanel
+              model={analysis.model}
+              isBusy={analysis.isBusy}
+              error={analysis.error}
+              activePath={activePath}
+              onReanalyze={analysis.reanalyze}
+              onOpenFile={(path, line) => void selectFile(path, line)}
             />
-            {isSearching && <span className="workspace__searchState">Buscando...</span>}
-          </div>
+          )}
         </aside>
 
         <main className="workspace__main">

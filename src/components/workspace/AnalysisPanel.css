@@ -1,0 +1,190 @@
+/*
+ * M2.1.0 - Panel de analisis del proyecto.
+ *
+ * Solo usa tokens del tema, como el resto de la interfaz, para que cambie de
+ * claro a oscuro sin nada escrito a mano. Es una lista de solo lectura: los
+ * elementos son botones porque saltan al archivo, no porque lo modifiquen.
+ */
+
+.analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 14px;
+}
+
+.analysis__busy,
+.analysis__empty,
+.analysis__note,
+.analysis__footnote {
+  margin: 0;
+  padding: 0 12px;
+  color: var(--color-text-subtle);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.analysis__busy {
+  color: var(--color-text-muted);
+}
+
+.analysis__error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-danger-soft);
+  color: var(--color-danger-text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.analysis > .button {
+  align-self: flex-start;
+  margin: 0 12px;
+}
+
+/* Cifras del resumen: se leen de un vistazo antes de bajar a los detalles. */
+.analysis__summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.analysis__figure {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.analysis__figure strong {
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.analysis__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.analysis__title {
+  margin: 0;
+  padding: 0 12px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.analysis__list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.analysis__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  background-color: transparent;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.analysis__item:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.analysis__item:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.analysis__item--active {
+  background-color: var(--color-accent-soft);
+}
+
+/* Avisos que no vienen de un archivo: no hay a donde saltar. */
+.analysis__item--static {
+  cursor: default;
+}
+
+.analysis__item--static:hover {
+  background-color: transparent;
+}
+
+.analysis__itemText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.analysis__itemName {
+  overflow: hidden;
+  color: var(--color-text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis__itemMeta,
+.analysis__warningWhere {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis__warningMessage {
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.analysis__warningWhere {
+  color: var(--color-text-subtle);
+  word-break: break-all;
+  white-space: normal;
+}
+
+.analysis__severity {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+}
+
+.analysis__severity--info {
+  background-color: var(--color-accent);
+}
+
+.analysis__severity--warning {
+  background-color: var(--color-warning);
+}
+
+.analysis__severity--error {
+  background-color: var(--color-danger);
+}

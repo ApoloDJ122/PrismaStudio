@@ -59,6 +59,34 @@ pub struct SearchMatch {
     pub preview: String,
 }
 
+/// Archivo encontrado al analizar el proyecto (M2.1.0).
+///
+/// El analizador solo necesita saber que existe, donde esta y cuanto pesa: quien
+/// decide que archivo importa es el frontend, y aqui no se lee su contenido.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScannedFile {
+    /// Ruta completa, en la misma forma que la devuelve el arbol de archivos.
+    pub path: String,
+    /// Ruta relativa a la raiz, con `/` como separador.
+    pub relative_path: String,
+    pub name: String,
+    /// Extension en minusculas sin el punto. En un `.blade.php` es `php`, que es
+    /// como la ve el sistema de archivos.
+    pub extension: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectScan {
+    pub files: Vec<ScannedFile>,
+    /// Carpetas ilegibles, profundidad alcanzada y otros avisos del recorrido.
+    pub warnings: Vec<String>,
+    /// `true` si se llego al limite de archivos y faltan por recorrer.
+    pub truncated: bool,
+}
+
 fn invalid_characters() -> Vec<char> {
     vec!['<', '>', ':', '"', '/', '\\', '|', '?', '*']
 }
@@ -116,6 +144,10 @@ fn language_for(path: &Path) -> Option<&'static str> {
         "js" | "mjs" => Some("javascript"),
         "json" => Some("json"),
         "txt" | "md" => Some("plaintext"),
+        // M2.1.0 - Las plantillas de Laravel se abren como PHP. Antes caian en
+        // `None` y tanto un `.php` como un `.blade.php` aparecian como texto
+        // plano, que es el limite que dejo documentado M2.0.0.
+        "php" => Some("php"),
         _ => None,
     }
 }
@@ -517,6 +549,171 @@ pub fn search_project_files(
     }
 
     Ok(matches)
+}
+
+// ---------------------------------------------------------------------------
+// Analisis del proyecto (M2.1.0)
+// ---------------------------------------------------------------------------
+
+/// Limite de archivos que devuelve un escaneo.
+const MAX_SCAN_FILES: usize = 5000;
+
+/// Estado del recorrido, para no crear un arbol de carpetas que no se usa.
+struct ScanState {
+    files: Vec<ScannedFile>,
+    warnings: Vec<String>,
+    /// Carpetas que no interesan al analizador, decidas por el frontend.
+    ignored: Vec<String>,
+    truncated: bool,
+    depth_limited: bool,
+}
+
+fn push_scan_warning(state: &mut ScanState, message: String) {
+    // El limite evita que una carpeta inaccesible suelte cientos de avisos
+    // repetidos en la interfaz.
+    if state.warnings.len() < 50 && !state.warnings.contains(&message) {
+        state.warnings.push(message);
+    }
+}
+
+/// `true` si una carpeta no debe recorrerse por estar en la lista de ignoradas.
+fn ignored_folder(name: &str, ignored: &[String]) -> bool {
+    let lower = name.to_lowercase();
+    ignored.iter().any(|entry| entry.to_lowercase() == lower)
+}
+
+/// Recoge los archivos de una carpeta y de sus subcarpetas, solo de lectura.
+///
+/// `root` es la carpeta del proyecto, que sirve para calcular la ruta relativa.
+/// `depth` es la profundidad de `dir` dentro del proyecto: se sigue el mismo
+/// limite que el arbol de archivos de M1 para que ambos coincidan.
+fn scan_directory(root: &Path, dir: &Path, depth: usize, state: &mut ScanState) {
+    if state.files.len() >= MAX_SCAN_FILES {
+        state.truncated = true;
+        return;
+    }
+
+    if depth >= MAX_TREE_DEPTH {
+        state.depth_limited = true;
+        return;
+    }
+
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            push_scan_warning(
+                state,
+                format!("No se pudo leer la carpeta '{}': {error}", dir.display()),
+            );
+            return;
+        }
+    };
+
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        if state.files.len() >= MAX_SCAN_FILES {
+            state.truncated = true;
+            return;
+        }
+
+        let path = entry.path();
+        let name = entry_name(&path);
+
+        // Ocultas: igual que el arbol de archivos, para no analizar `.git` y demas.
+        if name.starts_with('.') {
+            continue;
+        }
+
+        if path.is_dir() {
+            if ignored_folder(&name, &state.ignored) {
+                continue;
+            }
+
+            scan_directory(root, &path, depth + 1, state);
+            continue;
+        }
+
+        if !path.is_file() {
+            continue;
+        }
+
+        let size = match entry.metadata() {
+            Ok(metadata) => metadata.len(),
+            Err(_) => continue,
+        };
+
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        state.files.push(ScannedFile {
+            path: path.to_string_lossy().to_string(),
+            relative_path: relative,
+            name,
+            extension: path
+                .extension()
+                .map(|value| value.to_string_lossy().to_lowercase())
+                .unwrap_or_default(),
+            size,
+        });
+    }
+}
+
+/// Recorre el proyecto y devuelve los archivos que existen, sin leer su
+/// contenido y sin modificar nada.
+///
+/// `ignored_dirs` lo manda el frontend: asi la lista de carpetas que no
+/// interesan se amplia en un solo sitio y no hace que cambiar Rust. Por defecto
+/// el frontend envia `node_modules`, `.git`, `target`, `dist`, `build` y
+/// `vendor`.
+#[tauri::command]
+pub fn scan_project_files(
+    project_path: String,
+    ignored_dirs: Vec<String>,
+) -> Result<ProjectScan, String> {
+    // Se valida con la ruta canonicalizada, pero se recorre la original: las
+    // rutas devueltas deben coincidir con las del arbol de archivos.
+    canonical_project(&project_path)?;
+    let root = Path::new(&project_path);
+
+    if !root.is_dir() {
+        return Err("La ruta seleccionada no es una carpeta.".to_string());
+    }
+
+    let mut state = ScanState {
+        files: Vec::new(),
+        warnings: Vec::new(),
+        ignored: ignored_dirs,
+        truncated: false,
+        depth_limited: false,
+    };
+
+    scan_directory(root, root, 0, &mut state);
+
+    if state.depth_limited {
+        push_scan_warning(
+            &mut state,
+            format!("Las carpetas más allá del nivel {MAX_TREE_DEPTH} no se analizan."),
+        );
+    }
+
+    if state.truncated {
+        push_scan_warning(
+            &mut state,
+            format!("El proyecto tiene más de {MAX_SCAN_FILES} archivos, así que el recorrido se ha detenido."),
+        );
+    }
+
+    state
+        .files
+        .sort_by_key(|file| file.relative_path.to_lowercase());
+
+    Ok(ProjectScan {
+        files: state.files,
+        warnings: state.warnings,
+        truncated: state.truncated,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1049,5 +1246,138 @@ mod tests {
         assert_eq!(target.relative_path, "index.html");
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_finds_the_files_and_skips_the_ignored_folders() {
+        let base = temp_dir("scan_ignored");
+        let project = base.join("sitio");
+        fs::create_dir_all(project.join("css")).unwrap();
+        fs::create_dir_all(project.join("node_modules/paquete")).unwrap();
+        fs::create_dir_all(project.join("target/debug")).unwrap();
+        fs::create_dir_all(project.join(".git")).unwrap();
+
+        fs::write(project.join("index.html"), "<h1>hola</h1>").unwrap();
+        fs::write(project.join("css/style.css"), "body{}").unwrap();
+        fs::write(project.join("node_modules/paquete/index.html"), "x").unwrap();
+        fs::write(project.join("target/debug/index.html"), "x").unwrap();
+        fs::write(project.join(".git/index.html"), "x").unwrap();
+
+        let scan = scan_project_files(
+            project.to_string_lossy().into(),
+            vec!["node_modules".to_string(), "target".to_string()],
+        )
+        .unwrap();
+
+        // Solo los dos que no se ignoran, en orden y con rutas relativas
+        // usando `/`, que es como las consume el analizador.
+        let relative: Vec<&str> = scan
+            .files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect();
+
+        assert_eq!(relative, vec!["css/style.css", "index.html"]);
+        assert_eq!(scan.files[0].name, "style.css");
+        assert_eq!(scan.files[0].extension, "css");
+        assert_eq!(scan.files[0].size, 6);
+        assert_eq!(scan.warnings, Vec::<String>::new());
+        assert!(!scan.truncated);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_list_of_ignored_folders_comes_from_the_caller() {
+        // Sin lista, node_modules se analiza igual: quien decide el criterio es
+        // el frontend, y por eso no hace falta tocar Rust para ampliarlo.
+        let base = temp_dir("scan_extensible");
+        let project = base.join("sitio");
+        fs::create_dir_all(project.join("node_modules/paquete")).unwrap();
+        fs::write(project.join("node_modules/paquete/index.html"), "x").unwrap();
+
+        let scan =
+            scan_project_files(project.to_string_lossy().into(), Vec::new()).unwrap();
+
+        assert_eq!(scan.files.len(), 1);
+        assert_eq!(scan.files[0].relative_path, "node_modules/paquete/index.html");
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_never_reads_or_changes_what_it_finds() {
+        // El escaneo es de solo lectura: el archivo tiene que salir igual que
+        // entro, con su contenido y su fecha intactos.
+        let base = temp_dir("scan_readonly");
+        let project = base.join("sitio");
+        fs::create_dir_all(&project).unwrap();
+        let file = project.join("index.html");
+        fs::write(&file, "<h1>original</h1>").unwrap();
+
+        let before = fs::read_to_string(&file).unwrap();
+        scan_project_files(project.to_string_lossy().into(), Vec::new()).unwrap();
+        let after = fs::read_to_string(&file).unwrap();
+
+        assert_eq!(before, after);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_refuses_a_path_that_is_not_a_folder() {
+        let base = temp_dir("scan_not_dir");
+        let file = base.join("index.html");
+        fs::write(&file, "<h1>hola</h1>").unwrap();
+
+        let error =
+            scan_project_files(file.to_string_lossy().into(), Vec::new()).unwrap_err();
+
+        assert_eq!(error, "La ruta seleccionada no es una carpeta.");
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_walks_the_real_demo_project() {
+        // El mismo proyecto de ejemplo que usa el frontend para probar el
+        // analizador: revisa que el recorrido llega a las carpetas anidadas de
+        // un sitio de verdad y devuelve rutas relativas con `/`.
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures/demo-project");
+
+        let scan = scan_project_files(
+            root.to_string_lossy().into(),
+            vec!["node_modules".to_string(), "target".to_string()],
+        )
+        .unwrap();
+
+        let relative: Vec<&str> = scan
+            .files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect();
+
+        assert!(relative.contains(&"index.html"));
+        assert!(relative.contains(&"resources/views/home.blade.php"));
+        assert!(relative.contains(&"resources/css/app.css"));
+        assert!(relative.contains(&"public/js/app.js"));
+        assert!(relative.len() >= 6);
+        assert!(relative
+            .iter()
+            .all(|path| !path.contains('\\') && !path.starts_with("..")));
+        assert_eq!(scan.warnings, Vec::<String>::new());
+        assert!(!scan.truncated);
+        // El fixture se queda tal cual: el escaneo solo lee.
+    }
+
+    #[test]
+    fn recognises_laravel_templates_as_php() {
+        // M2.1.0: los archivos de plantillas dejan de abrirse como texto plano.
+        assert_eq!(
+            language_for(Path::new("resources/views/home.blade.php")),
+            Some("php")
+        );
+        assert_eq!(language_for(Path::new("index.php")), Some("php"));
+        assert_eq!(language_for(Path::new("index.html")), Some("html"));
     }
 }

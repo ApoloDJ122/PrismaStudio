@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prisma demo</title>
+    <link rel="stylesheet" href="resources/css/base.css" />
+    <link rel="stylesheet" href="https://cdn.example.com/tailwind.css" />
+    <link rel="stylesheet" href="css/missing.css" />
+    <script src="public/js/app.js"></script>
+  </head>
+  <body>
+    <header class="hero" id="top">
+      <h1>Proyecto de ejemplo</h1>
+      <p style="color: #0f766e">Un HTML con estilos, scripts y algun que otro problema.</p>
+    </header>
+    <main>
+      <boton-fantasma tipo="primario">Etiqueta que Prisma no conoce</boton-fantasma>
+      <p>
+        Enlace a la <a href="#inicio">parte de arriba</a> y a otro sitio:
+        <a href="https://example.com">ejemplo</a>.
+      </p>
+      <script>
+        window.addEventListener("load", function () {
+          console.log("comportamiento incrustado");
+        });
+      </script>
+    </main>
+  </body>
+</html>

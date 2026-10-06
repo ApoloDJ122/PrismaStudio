@@ -18,6 +18,7 @@ pub fn run() {
             projects::rename_entry,
             projects::delete_entry,
             projects::search_project_files,
+            projects::scan_project_files,
             projects::resolve_run_entry,
             projects::run_project,
             session::load_session,

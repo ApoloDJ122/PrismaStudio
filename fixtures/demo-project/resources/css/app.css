@@ -1,0 +1,30 @@
+/* Hoja principal: la enlaza la vista de Laravel. */
+
+.titulo {
+  color: #1f2937;
+  font-size: 2rem;
+}
+
+.titulo.destacado,
+.saldo {
+  color: #0f766e;
+}
+
+.tarea {
+  list-style: none;
+}
+
+.alerta--info {
+  border-left: 4px solid #0f766e;
+}
+
+a:hover,
+.titulo:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .titulo {
+    font-size: 1.5rem;
+  }
+}

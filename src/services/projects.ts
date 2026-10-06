@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import type { ProjectFile, ProjectInfo, ProjectNode, SearchMatch } from "../types/project";
+import type { ProjectFile, ProjectInfo, ProjectNode, ProjectScan, SearchMatch } from "../types/project";
 import type { RunTarget } from "../types/session";
 
 export function createWebProject(name: string, parentDir: string): Promise<ProjectInfo> {
@@ -57,6 +57,19 @@ export function searchProjectFiles(
   query: string,
 ): Promise<SearchMatch[]> {
   return invoke<SearchMatch[]>("search_project_files", { projectPath, query });
+}
+
+/**
+ * Recorre el proyecto y lista sus archivos sin leerlos ni cambiarlos.
+ *
+ * Solo mira nombres y tamanos; los contenidos se traen con `readProjectFile`,
+ * archivo a archivo, y unicamente para los que interesan analizar.
+ */
+export function scanProjectFiles(
+  projectPath: string,
+  ignoredDirs: string[],
+): Promise<ProjectScan> {
+  return invoke<ProjectScan>("scan_project_files", { projectPath, ignoredDirs });
 }
 
 /** Comprueba si el proyecto se puede ejecutar y devuelve su archivo de entrada. */

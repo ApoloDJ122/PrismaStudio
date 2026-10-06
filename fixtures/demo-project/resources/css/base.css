@@ -1,0 +1,26 @@
+/* Hoja estatica: la enlaza index.html. */
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+}
+
+h1 {
+  font-size: 3rem;
+}
+
+.hero {
+  padding: 2rem;
+}
+
+.hero h1 {
+  letter-spacing: -0.02em;
+}
+
+.titulo {
+  color: #111827;
+}
+
+a:hover {
+  text-decoration: underline;
+}

@@ -75,7 +75,21 @@ src/
 │       ├── Workspace.tsx       # estructura general, acciones, atajos y diálogos
 │       ├── FileTree.tsx        # árbol de archivos: selección, teclado y menú contextual
 │       ├── CodeEditor.tsx      # Monaco con carga diferida y modelo por archivo
+│       ├── AnalysisPanel.tsx   # panel lateral de análisis del proyecto abierto
 │       └── SearchOverlay.tsx   # apertura rápida (Ctrl+P) y búsqueda (Ctrl+Shift+F)
+├── analysis/                   # M2.1.0: análisis de solo lectura, TypeScript puro y sin IO
+│   ├── types.ts                # FileModel, ProjectModel y los contratos del análisis
+│   ├── scan.ts                 # archivos del escaneo a modelo, tipos y grupos
+│   ├── refs.ts                 # resolución de rutas relativas dentro del proyecto
+│   ├── warnings.ts             # lista de avisos con identificador y tope por documento
+│   ├── document.ts             # documento: elementos, texto y avisos de un HTML/Blade
+│   ├── styles.ts               # índice de hojas, reglas por elemento y asociaciones
+│   ├── analyze.ts              # orquestación del análisis y avisos del recorrido
+│   ├── scan.test.ts            # pruebas de archivos, grupos y clasificación
+│   ├── refs.test.ts            # pruebas de referencias relativas
+│   ├── document.test.ts        # pruebas de documentos y avisos
+│   ├── styles.test.ts          # pruebas del índice de estilos
+│   └── analyze.test.ts         # pruebas del análisis completo
 ├── editor/
 │   └── monacoEnvironment.ts    # workers de Monaco empaquetados por Vite
 ├── designer/                   # M2.0.0: modelo visual interno, sin interfaz ni IO
@@ -94,7 +108,8 @@ src/
 │   └── classify.test.ts        # pruebas de clasificación de archivos
 ├── hooks/
 │   ├── useProject.ts           # ciclo de vida del proyecto: crear, abrir, ejecutar, cerrar
-│   └── useWorkspace.ts         # búferes, pestañas, guardado, búsqueda y operaciones de archivos
+│   ├── useWorkspace.ts         # búferes, pestañas, guardado, búsqueda y operaciones de archivos
+│   └── useAnalysis.ts          # escaneo y análisis del proyecto abierto, con reanálisis
 ├── services/
 │   ├── projects.ts             # invocación de comandos Rust de proyectos y archivos
 │   └── session.ts              # lectura, escritura y borrado de la sesión guardada
@@ -106,7 +121,7 @@ src/
 │   ├── ui.css                  # diálogos y pantalla de error
 │   └── App.css                 # layout raíz
 └── types/
-    ├── project.ts              # tipos ProjectInfo, ProjectNode, ProjectFile y SearchMatch
+    ├── project.ts              # tipos ProjectInfo, ProjectNode, ProjectFile, ScannedFile y SearchMatch
     ├── session.ts              # tipos RunTarget, SessionState y SessionTab
     └── node-test.d.ts          # declaraciones mínimas de node:test y node:assert
 
@@ -138,7 +153,7 @@ aportan funcionalidad se registran en el historial de versiones sin abrir una ve
 | ------ | ------ | ------ |
 | 0 | Base técnica | Completado |
 | 1 | Proyectos web | En desarrollo (`M1.0.0` a `M1.5.0` completadas) |
-| 2 | Diseñador visual | En desarrollo (`M2.0.0` completada) |
+| 2 | Diseñador visual | En desarrollo (`M2.0.0` y `M2.1.0` completadas) |
 
 ## Historial de versiones
 
@@ -385,7 +400,9 @@ Corrección de `M1.3.0` incluida en esta versión:
   editor acepta `undefined` y `tsconfig.json` activa `noUncheckedIndexedAccess` para que el error
   no vuelva a aparecer por accesos fuera de rango.
 
-### M2.0.0 — Base del diseñador visual
+### Módulo 2 — Diseñador visual
+
+#### M2.0.0 — Base del diseñador visual
 
 Alcance implementado:
 
@@ -459,14 +476,72 @@ Decisiones de alcance:
 - **No se añaden dependencias**: el modelo no incorpora ningún paquete. Las pruebas usan el runner
   de Node que ya usa el proyecto.
 
-#### M2.1.0 — Alcance previsto
+#### M2.1.0 — Analizador e importador de proyectos (completada)
 
-Lo que queda para la siguiente versión, y que este modelo ya permite:
+Alcance implementado:
 
-- Reconocer `.php` y `.blade.php` en Rust para que se abran con resaltado.
+- **Escaneo del proyecto en Rust**
+  - Nuevo comando `scan_project_files` en `src-tauri/src/projects.rs`: recorre una carpeta y
+    devuelve cada archivo con su ruta absoluta, su ruta relativa con `/`, su nombre, su extensión y
+    su tamaño, más los avisos del recorrido y si se alcanzó algún límite.
+  - La lista de carpetas ignoradas llega desde el frontend (`DEFAULT_IGNORED_DIRS` en
+    `src/analysis/scan.ts`): `node_modules`, `.git`, `target`, `dist`, `build` y `vendor`. Quien
+    decide el criterio es el frontend, así que ampliar la lista no obliga a tocar Rust.
+  - Límites del recorrido: 5000 archivos, 8 niveles de profundidad. Al llegar a un límite se
+    devuelve un aviso en lugar de fallar.
+  - El escaneo es de solo lectura: no escribe nada, no ejecuta `npm install`, `composer`, PHP ni
+    JavaScript, y no abre el contenido de los archivos.
+  - `language_for` reconoce `.php` y `.blade.php`, así que se abren con su resaltado: era la deuda
+    que dejó `M2.0.0`.
+
+- **Capa de análisis en `src/analysis`** (TypeScript puro, sin React y sin acceso a disco)
+  - Recibe lo que otros ya leyeron: el escaneo, los contenidos y los fallos de lectura, y devuelve
+    un `ProjectModel`. No hace `throw`: un archivo dañado termina en `readFailures` y el análisis
+    sigue con el resto.
+  - `scan.ts` pasa los archivos del escaneo a `FileModel` y los reparte en cuatro grupos:
+    documentos, hojas de estilo, scripts y otros. La extensión es la del disco y el papel del
+    archivo se decide por su nombre completo (un `.blade.php` es `blade`, no `php`).
+  - `document.ts` construye el `DocumentModel` con el lector de M2.0.0: elementos, texto, título,
+    `<link rel="stylesheet">`, `<script>` y avisos. Un doctype no es un aviso, y la sintaxis de
+    plantilla (Blade o `{{ }}`) se anota una sola vez por documento.
+  - `styles.ts` indexa las hojas enlazadas, las reglas por elemento y la vista inversa: qué
+    reglas de qué hoja afectan a un elemento concreto.
+  - `refs.ts` resuelve `href` y `src` contra la raíz del proyecto; lo externo (`http://`, `//`,
+    `data:`) o lo que se sale de la raíz se marca como no resuelto sin intentar leerlo.
+  - `warnings.ts` da un identificador único a cada aviso (`archivo#linea`) y limita los de un
+    mismo documento a 40, resumiendo el resto en uno solo.
+  - `analyze.ts` orquesta las cinco fases del análisis y calcula el resumen: archivos, documentos,
+    hojas, scripts, elementos, reglas, avisos y referencias sin resolver.
+
+- **Interfaz**
+  - La barra lateral del workspace gana un conmutador `Archivos` / `Analisis`, sin ocupar espacio
+    del editor.
+  - `AnalysisPanel` muestra el resumen en cifras, los documentos, las hojas de estilo, los scripts
+    detectados y los avisos, cada uno con su severidad y su `archivo:línea`.
+  - Clic en un aviso con archivo: se abre ese archivo en esa línea. El botón `Reanalizar` vuelve a
+    recorrer el proyecto, y si el análisis falla se ofrece reintentar.
+  - `useAnalysis` arranca al abrir el proyecto, lee solo los documentos y las hojas de estilo, y
+    se cancela si se cambia de proyecto para no analizar dos a la vez.
+
+Decisiones de alcance:
+
+- **Solo lectura.** El análisis no escribe ni modifica nada del proyecto importado.
+- **No se ejecuta nada.** Ni PHP, ni JavaScript, ni `npm install`, ni `composer`, ni directivas
+  Blade: lo que se lee se conserva tal cual.
+- **No hay cascada completa.** Solo se aplican las hojas que el documento enlaza con
+  `<link rel="stylesheet">`. No se sigue `@import`, no se resuelve cuál hoja gana y el contenido
+  de un `<style>` se cuenta pero no se analiza.
+- **Sin drag & drop, lienzo, edición visual, componentes, deshacer/rehacer, Laravel, base de
+  datos ni rutas.** Sigue correspondiendo a versiones posteriores.
+- **Sin dependencias nuevas.** Las pruebas siguen en el runner de Node que ya usa el proyecto.
+
+#### Alcance previsto — a partir de `M2.2.0`
+
+Lo que queda por hacer, y que este análisis ya permite:
+
 - Dibujar el árbol del modelo en el lienzo, con selección y correspondencia con el archivo.
 - Inspector de propiedades, con edición de atributos, textos y clases.
-- Leer los `<style>` incrustados y las hojas `.css` del proyecto y aplicar la cascada.
+- Resolver la cascada CSS y leer los `<style>` incrustados.
 - Decidir qué se hace con JavaScript en la vista: hoy se conserva el archivo y no se representa.
 
 ## Estado actual
@@ -504,6 +579,44 @@ Funciona actualmente:
 - El workspace muestra cuántos archivos están pendientes de guardar junto al nombre del proyecto.
 - Si un archivo cambia en el disco mientras Prisma está abierto, no se sobrescribe: se avisa y el
   usuario decide.
+- La barra lateral del workspace tiene dos modos, `Archivos` y `Analisis`. El análisis recorre el
+  proyecto abierto, ignora `node_modules`, `.git`, `target`, `dist`, `build` y `vendor` y resume
+  los documentos, las hojas de estilo, los scripts, los elementos, las reglas de CSS y los avisos
+  encontrados.
+- El análisis es de solo lectura: no escribe en el proyecto, no ejecuta PHP ni JavaScript, no
+  instala dependencias y no modifica nada de lo que recorre. Un archivo ilegible o dañado no
+  detiene el análisis del resto.
+- Cada aviso de análisis indica su severidad y su `archivo:línea`; al pulsarlo se abre ese archivo
+  en esa línea. El botón `Reanalizar` vuelve a recorrer el proyecto.
+
+Comprobaciones realizadas al cerrar `M2.1.0`:
+
+- `npx tsc --noEmit` no informa de errores de tipos.
+- `npm test` ejecuta 241 pruebas del frontend con el runner integrado de Node, todas correctas. Las
+  58 nuevas cubren `src/analysis`: archivos y grupos del escaneo (9), referencias relativas (10),
+  documentos y avisos (12), índice de estilos (12) y análisis completo (15). Las 183 de `M2.0.0` y
+  las anteriores siguen pasando.
+- `cargo test` en `src-tauri` da 39 pruebas, todas correctas: 6 nuevas sobre el escaneo, entre ellas
+  una que recorre el proyecto de ejemplo de `fixtures/demo-project`.
+- `cargo clippy --all-targets` no informa de avisos.
+- `npm run build` (Vite) compila sin errores.
+
+Limitaciones conocidas de `M2.1.0`:
+
+- **El análisis es un resumen, no una cascada.** Solo se aplican las hojas que un documento enlaza
+  con `<link rel="stylesheet">`: no se sigue `@import`, no se resuelve cuál hoja gana y el contenido
+  de un `<style>` se cuenta pero no se analiza.
+- Las hojas enlazadas que no son locales (`https://`, `//`, `data:`) se marcan como no resueltas y
+  no se descargan, ni siquiera si el usuario lo pidiera: Prisma no sale de la carpeta del proyecto.
+- Los scripts no se leen. Se sabe que existen y si su `src` apunta a un archivo del proyecto, pero
+  su contenido no entra en el análisis.
+- El escaneo no es incremental: `Reanalizar` vuelve a recorrerlo todo. Tampoco se avisa si el
+  proyecto cambia mientras está abierto, más allá del aviso de cambios externos que ya existía en el
+  editor.
+- La lista de carpetas ignoradas es una constante de código (`DEFAULT_IGNORED_DIRS`). Ampliarla
+  hoy obliga a editar `src/analysis/scan.ts`; no hay un campo en `Configuración`.
+- El análisis no se ha comprobado con la aplicación real: las 58 pruebas usan el runner de Node y
+  el panel de análisis no tiene pruebas de interfaz.
 
 Comprobaciones realizadas al cerrar `M2.0.0`:
 
@@ -836,3 +949,30 @@ Estos objetivos son únicamente los conocidos. No se ha definido ni implementado
   formados, sin cerrar y con etiquetas desconocidas.
 - `src/types/node-test.d.ts` ampliado con `ok` y `node:assert/strict`, que usan las pruebas nuevas.
 - Sin dependencias nuevas, sin cambios en Rust y sin cambios en la interfaz.
+
+#### M2.1.0 — Analizador e importador de proyectos
+
+- `src-tauri/src/projects.rs` con el comando `scan_project_files`, los tipos `ScannedFile` y
+  `ProjectScan`, la lista de carpetas ignoradas recibida del frontend, los límites de 5000 archivos
+  y 8 niveles, y `language_for` reconociendo `.php` y `.blade.php`.
+- `src-tauri/src/lib.rs` con el comando registrado.
+- `src/types/project.ts` con `ScannedFile` y `ProjectScan`, y `src/services/projects.ts` con
+  `scanProjectFiles`.
+- Nuevo directorio `src/analysis`, TypeScript puro, sin React y sin acceso al sistema de archivos:
+  `types.ts` (`FileModel`, `DocumentModel`, `AnalysisWarning`, `ProjectModel` y contratos),
+  `scan.ts` (archivos del escaneo a modelo y grupos), `refs.ts` (referencias relativas dentro del
+  proyecto), `warnings.ts` (identificadores y tope por documento), `document.ts` (documentos y sus
+  avisos), `styles.ts` (índice de hojas enlazadas, reglas por elemento y asociaciones) y
+  `analyze.ts` (las cinco fases del análisis y el resumen).
+- Nuevo `src/hooks/useAnalysis.ts`: escanea y analiza el proyecto abierto, cancela el análisis
+  anterior si cambia el proyecto y lo repite con `reanalyze`.
+- Nuevos `src/components/workspace/AnalysisPanel.tsx` y `AnalysisPanel.css`: resumen, documentos,
+  hojas de estilo, scripts detectados y avisos con severidad, saltando a la línea al pulsarlos.
+- `src/components/workspace/Workspace.tsx` y `Workspace.css` con el conmutador `Archivos` /
+  `Analisis` en la cabecera de la barra lateral.
+- `src/designer/css.ts` corregido: `splitRules` atribuía a cada regla la línea del `}` anterior
+  cuando dos reglas venían seguidas.
+- `src/theme/theme.test.ts` con `AnalysisPanel.css` en la lista de estilos que deben usar tokens.
+- `fixtures/demo-project` con un proyecto de ejemplo: HTML, dos plantillas Blade con componente,
+  dos hojas de estilo, scripts y referencias externas y rotas.
+- 58 pruebas nuevas en `src/analysis` y 6 en Rust. Sin dependencias nuevas.

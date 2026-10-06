@@ -116,7 +116,11 @@ function splitRules(text: string): RawRule[] {
       }
 
       index = closed ? cursor + 1 : text.length;
-      ruleStart = index;
+
+      // Se vuelve a `-1` para que la regla siguiente empiece en su selector, no
+      // en el salto de linea que deja la anterior: si no, su linea seria la del
+      // cierre de la anterior y saltaria a un sitio equivocado.
+      ruleStart = -1;
       continue;
     }
 

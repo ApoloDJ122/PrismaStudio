@@ -81,20 +81,49 @@
   background-color: var(--color-sidebar-bg);
 }
 
+/* Dos filas: las pestanas encima y las acciones debajo. En 260px de ancho no
+   caben todas las etiquetas en una sola linea. */
 .workspace__sidebarHead {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   padding: 10px 10px 8px 14px;
 }
 
-.workspace__sidebarTitle {
+/* Conmutador entre el arbol de archivos y el panel de analisis (M2.1.0). */
+.workspace__sidebarTabs {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workspace__sidebarTab {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background-color: transparent;
   color: var(--color-text-muted);
+  font-family: inherit;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  cursor: pointer;
+}
+
+.workspace__sidebarTab:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.workspace__sidebarTab:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -1px;
+}
+
+.workspace__sidebarTab--active {
+  background-color: var(--color-accent-soft);
+  color: var(--color-accent);
 }
 
 .workspace__sidebarActions {
