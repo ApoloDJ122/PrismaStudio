@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import prismaLogo from "../../assets/prisma-logo.png";
 import { useAnalysis } from "../../hooks/useAnalysis";
 import { useWorkspace } from "../../hooks/useWorkspace";
+import { useDesigner } from "../../hooks/useDesigner";
 import type { ProjectState } from "../../hooks/useProject";
 import type { ProjectNode } from "../../types/project";
 import type { ThemeName } from "../../types/preferences";
@@ -14,6 +15,8 @@ import AnalysisPanel from "./AnalysisPanel";
 import CodeEditor, { type CodeEditorApi } from "./CodeEditor";
 import FileTree, { type TreeCommand } from "./FileTree";
 import SearchOverlay, { type PaletteMode } from "./SearchOverlay";
+import { DesignCanvas, DesignPanel, PropertiesPanel } from "./design";
+import { readProjectFile, saveProjectFile } from "../../services/projects";
 import "./Workspace.css";
 
 type Dialog =
@@ -87,6 +90,8 @@ function Workspace({
     clearReveal,
     reportError,
     clearError: clearWorkspaceError,
+    writeBuffer,
+    buffers,
   } = useWorkspace(projectState);
 
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -96,6 +101,36 @@ function Workspace({
   // M2.1.0 - Analisis de solo lectura del proyecto abierto.
   const analysis = useAnalysis(project);
   const [sidebarMode, setSidebarMode] = useState<"files" | "analysis">("files");
+
+  // M2.2.0 - Diseñador visual. Los puentes se memoizan: objetos nuevos en cada
+  // render harían recargar el documento y borrarían las ediciones sin aplicar.
+  const projectPath = project?.path ?? "";
+  const designerOptions = useMemo(() => ({
+    getCssText: async (href: string | null) => {
+      if (href === null) return null;
+      try {
+        const read = await readProjectFile(href, projectPath);
+        return read.content;
+      } catch {
+        return null;
+      }
+    },
+    writeCssText: async (href: string | null, text: string) => {
+      if (href === null) return;
+      await saveProjectFile(href, text, projectPath);
+    },
+  }), [projectPath]);
+  const designerSaveBuffer = useCallback(
+    (path: string) => saveBuffer(path),
+    [saveBuffer],
+  );
+  const designerWorkspace = useMemo(() => ({
+    activePath,
+    writeBuffer,
+    saveBuffer: designerSaveBuffer,
+    buffers,
+  }), [activePath, writeBuffer, designerSaveBuffer, buffers]);
+  const designer = useDesigner(projectState, designerOptions, designerWorkspace);
 
   const editorApiRef = useRef<CodeEditorApi | null>(null);
 
@@ -190,7 +225,7 @@ function Workspace({
       } else if (dialog.type === "delete") {
         failure = await deleteEntry(dialog.path);
       } else {
-        // Los diálogos de cierre y de ejecución no pasan por aquí.
+        // Los di├ílogos de cierre y de ejecuci├│n no pasan por aqu├¡.
         return;
       }
 
@@ -204,8 +239,8 @@ function Workspace({
     [closeDialog, createEntry, deleteEntry, dialog, project, renameEntry],
   );
 
-  // `hasUnsavedChanges` viene del hook, que ya lleva la cuenta de los búferes
-  // pendientes. No se vuelve a recorrer los buffers aquí.
+  // `hasUnsavedChanges` viene del hook, que ya lleva la cuenta de los b├║feres
+  // pendientes. No se vuelve a recorrer los buffers aqu├¡.
   const requestCloseProject = useCallback(() => {
     if (hasUnsavedChanges) {
       setDialog({ type: "close-project" });
@@ -216,10 +251,10 @@ function Workspace({
   }, [closeProject, hasUnsavedChanges]);
 
   /*
-   * M1.4.0 - Ejecución.
+   * M1.4.0 - Ejecuci├│n.
    *
-   * Con cambios sin guardar se pregunta antes, para no ejecutar una versión del
-   * proyecto que difiere de la que el usuario está viendo.
+   * Con cambios sin guardar se pregunta antes, para no ejecutar una versi├│n del
+   * proyecto que difiere de la que el usuario est├í viendo.
    */
   const requestRun = useCallback(() => {
     if (hasUnsavedChanges) {
@@ -238,8 +273,8 @@ function Workspace({
       if (saveFirst) {
         const failure = await saveAll();
 
-        // Solo se ejecuta si todo se guardó bien: si no, el navegador abriría
-        // una versión del proyecto que difiere de la que se ve en pantalla.
+        // Solo se ejecuta si todo se guard├│ bien: si no, el navegador abrir├¡a
+        // una versi├│n del proyecto que difiere de la que se ve en pantalla.
         if (failure !== null) {
           setDialogError(failure);
           return;
@@ -277,7 +312,7 @@ function Workspace({
       if (saveFirst) {
         const failure = await saveBuffer(path);
 
-        // Solo se cierra si el guardado funcionó: así no se pierde el trabajo.
+        // Solo se cierra si el guardado funcion├│: as├¡ no se pierde el trabajo.
         if (failure !== null) {
           setDialogError(failure);
           return;
@@ -318,7 +353,7 @@ function Workspace({
         return;
       }
 
-      // Ctrl+W cierra la pestaña activa; Ctrl+Shift+W cierra el proyecto.
+      // Ctrl+W cierra la pesta├▒a activa; Ctrl+Shift+W cierra el proyecto.
       if (key === "w") {
         event.preventDefault();
 
@@ -415,6 +450,24 @@ function Workspace({
         <div className="workspace__actions">
           <button
             type="button"
+            className={`button button--secondary ${designer.viewMode === "design" ? "button--primary" : ""}`}
+            onClick={() => designer.setViewMode(designer.viewMode === "design" ? "code" : "design")}
+          >
+            {designer.viewMode === "design" ? "Código" : "Diseño"}
+          </button>
+          {designer.viewMode === "design" && (
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={isBusy}
+              title="Volcar el lienzo al búfer y guardar en disco"
+              onClick={() => void designer.applyToBuffers({ writeBuffer, saveBuffer })}
+            >
+              Aplicar cambios
+            </button>
+          )}
+          <button
+            type="button"
             className="button button--secondary"
             disabled={!hasUnsavedChanges || isBusy}
             onClick={() => void saveAll()}
@@ -453,7 +506,7 @@ function Workspace({
           <button
             type="button"
             className="button button--ghost"
-            title="Ajustes de la aplicación"
+            title="Ajustes de la aplicaci├│n"
             onClick={onOpenSettings}
           >
             Ajustes
@@ -461,8 +514,21 @@ function Workspace({
         </div>
       </header>
 
-      <div className="workspace__body">
-        <aside className="workspace__sidebar">
+      {designer.viewMode === "design" ? (
+        <div className="designer">
+          <aside className="designer__left" aria-label="Estructura y elementos">
+            <DesignPanel designer={designer} />
+          </aside>
+          <main className="designer__main">
+            <DesignCanvas designer={designer} />
+          </main>
+          <aside className="designer__right" aria-label="Propiedades">
+            <PropertiesPanel designer={designer} />
+          </aside>
+        </div>
+      ) : (
+        <div className="workspace__body">
+          <aside className="workspace__sidebar">
           <div className="workspace__sidebarHead">
             <div className="workspace__sidebarTabs" role="tablist" aria-label="Panel lateral">
               <button
@@ -562,9 +628,9 @@ function Workspace({
               onOpenFile={(path, line) => void selectFile(path, line)}
             />
           )}
-        </aside>
+          </aside>
 
-        <main className="workspace__main">
+          <main className="workspace__main">
           <div className="workspace__tabbar" role="tablist" aria-label="Archivos abiertos">
             {openTabs.length === 0 ? (
               <span className="workspace__tab workspace__tab--active">
@@ -598,13 +664,13 @@ function Workspace({
                       role="button"
                       aria-label={`Cerrar ${tab.name}`}
                       onClick={(event) => {
-                        // Sin esto el clic cerraría la pestaña y la activaría a la vez.
+                        // Sin esto el clic cerrar├¡a la pesta├▒a y la activar├¡a a la vez.
                         event.stopPropagation();
                         requestCloseTab(tab.path, tab.name);
                       }}
-                      title="Cerrar pestaña"
+                      title="Cerrar pesta├▒a"
                     >
-                      ×
+                      ├ù
                     </span>
                   </span>
                 );
@@ -628,8 +694,9 @@ function Workspace({
             }}
             onError={reportError}
           />
-        </main>
-      </div>
+          </main>
+        </div>
+      )}
 
       {isLoadingFile && <p className="workspace__status">Abriendo archivo...</p>}
 
@@ -666,7 +733,7 @@ function Workspace({
         <span className="workspace__statusbarSaveState">
           {isActiveDirty ? "Sin guardar" : "Guardado"}
         </span>
-        {isRestoring && <span className="workspace__statusbarSaveState">Recuperando sesión...</span>}
+        {isRestoring && <span className="workspace__statusbarSaveState">Recuperando sesi├│n...</span>}
       </div>
 
       {dialog?.type === "new-file" && (
@@ -729,8 +796,8 @@ function Workspace({
 
       {dialog?.type === "close-tab" && (
         <ConfirmDialog
-          title="Cerrar pestaña"
-          message={`"${dialog.name}" tiene cambios sin guardar. ¿Qué quieres hacer con ellos?`}
+          title="Cerrar pesta├▒a"
+          message={`"${dialog.name}" tiene cambios sin guardar. ┬┐Qu├® quieres hacer con ellos?`}
           confirmLabel="Guardar y cerrar"
           extraLabel="No guardar"
           cancelLabel="Cancelar"
@@ -745,7 +812,7 @@ function Workspace({
           title="Ejecutar el proyecto"
           description={`Hay ${dirtyPaths.size} ${
             dirtyPaths.size === 1 ? "archivo con cambios sin guardar" : "archivos con cambios sin guardar"
-          }. El navegador abrirá los archivos del disco.`}
+          }. El navegador abrir├í los archivos del disco.`}
           onClose={closeDialog}
           width={440}
         >

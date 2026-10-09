@@ -153,7 +153,7 @@ aportan funcionalidad se registran en el historial de versiones sin abrir una ve
 | ------ | ------ | ------ |
 | 0 | Base técnica | Completado |
 | 1 | Proyectos web | En desarrollo (`M1.0.0` a `M1.5.0` completadas) |
-| 2 | Diseñador visual | En desarrollo (`M2.0.0` y `M2.1.0` completadas) |
+| 2 | Diseñador visual | En desarrollo (`M2.0.0`, `M2.1.0`, `M2.2.0` y `M2.2.1` completadas) |
 
 ## Historial de versiones
 
@@ -544,6 +544,87 @@ Lo que queda por hacer, y que este análisis ya permite:
 - Resolver la cascada CSS y leer los `<style>` incrustados.
 - Decidir qué se hace con JavaScript en la vista: hoy se conserva el archivo y no se representa.
 
+#### M2.2.0 — Diseñador visual: lienzo, árbol y sincronización HTML/CSS (completada)
+
+Alcance implementado:
+
+- **Núcleo de edición en `src/designer/edit.ts`** (TypeScript puro, sin React y sin IO):
+  `insertElement`, `reparentNode`/`applyMove`, `reorderNode`, `ensureStylesheetLink` y
+  `ensureStyleNode`. Toda edición devuelve `EditResult`: o se aplica entera o no se aplica.
+- **Orquestador `src/hooks/useDesigner.ts`**: re-parse sin pérdidas al entrar en Diseño,
+  detección del CSS objetivo (primer `<link>` externo o `<style>` interno), operaciones
+  `insertTag`, `moveNode`, `reorder` y `ensureExternalCss`, y volcado a búferes con
+  `applyToBuffers`.
+- **Interfaz en `src/components/workspace/design/`**: `DesignCanvas` (render recursivo con
+  selección y arrastre entre padres), `DesignTree` (árbol jerárquico con selección
+  bidireccional y subir/bajar) y `DesignPanel` (paleta por `ELEMENT_PALETTE`, selector de
+  padre y acciones).
+- **Integración en `Workspace.tsx`**: conmutador `Código` / `Diseño` en la cabecera. En modo
+  Diseño el lateral muestra el panel y el área principal el lienzo; el botón `Aplicar cambios`
+  vuelca el lienzo a los búferes y guarda en disco. `selectFile` reutiliza el búfer existente
+  para no sobrevivir cambios sin guardar, y `writeBuffer(path, content)` actualiza el búfer
+  sin tocar las pestañas.
+- **Fidelidad del roundtrip**: `serialize(parse(html))` conserva Blade, `<script>`, `<style>` y
+  el texto exacto de apertura/cierre; las ediciones solo tocan los nodos afectados.
+
+Decisiones de alcance (fuera de M2.2.0):
+
+- **Sin eliminar nodos, sin redimensionar, sin deshacer/rehacer.** El inspector edita lo
+  esencial (insertar, mover, reordenar); el resto sigue en el editor de código.
+- **Sin cascada CSS completa.** Se lee y escribe el CSS objetivo, pero no se resuelve qué regla
+  gana ni se sigue `@import`.
+- **Sin pruebas de interfaz.** La UI se verifica manualmente; las pruebas automáticas cubren el
+  núcleo puro (`edit`, `attributes`, `class`, `cssEdit`, `parse`, `tree`).
+- **Sin dependencias nuevas.** Las pruebas siguen en el runner de Node que ya usa el proyecto.
+
+#### M2.2.1 — Reconstrucción del diseñador visual (completada)
+
+La interfaz de M2.2.0 mostraba el HTML como lista técnica y varias operaciones previstas no
+funcionaban. Se reconstruyó la experiencia reutilizando todo el núcleo puro y se corrigieron
+dos errores reales que la verificación destapó (`canContain` impedía subir un elemento a un
+antecesor; `ensureStyleNode` reventaba en documentos sin `<head>`).
+
+Alcance implementado:
+
+- **Separación visual/técnico (`src/designer/visual.ts`)**: el lienzo dibuja los hijos del
+  `<body>` (o el fragmento filtrado); `html`, `head`, `meta`, `title`, `link`, `script` y
+  `style` se conservan en el modelo y el HTML pero no ocupan espacio visual. Los textos con
+  solo espacios no se dibujan y el Blade dinámico aparece como insignia.
+- **Lienzo centrado en el diseño**: página blanca sobre fondo punteado, zoom (botones, clic en
+  el porcentaje para restablecer, `Ctrl+rueda`, centrar), desplazamiento nativo, estado
+  `Canvas vacío`, texto real visible, imágenes con placeholder si no resuelven y selección con
+  borde más etiqueta. La hoja del autor se inyecta con ámbito (`.ds-page`, sin `@media`) para
+  previsualizar sus estilos sin pintar la UI de Prisma. Las coordenadas de soltado se corrigen
+  por zoom y el fondo de la página suelta dentro del `<body>`, no fuera del documento.
+- **Árbol jerárquico real**: colapsable, con `#id` como pista, selección bidireccional con el
+  lienzo (el árbol sigue a la selección) y sin nodos técnicos.
+- **Librería con buscador y Jerarquía colapsable**: la paleta por categorías
+  (`Contenedores`, `Texto`, `Interacción`, `Media`, `Enlaces`, `Listas`) filtra por texto; el
+  nuevo elemento entra en el contenedor seleccionado o en el fondo, recibe clase estable
+  (`.div-1 { position: relative; }`), se selecciona y aparece en árbol, lienzo y HTML.
+- **Inspector por secciones** (estilo Scene Builder): Propiedades, Texto, Identificación,
+  Disposición (X/Y + tamaño), Estilos básicos (`display`, `position`, `margin`, `padding`,
+  `color`, `background-color`, `font-size`) y Acciones (subir/bajar/eliminar).
+- **Barra del documento**: la hoja es del HTML, no del componente. Muestra el documento activo
+  con selector (enlazadas o `<style>` interno) y creación con nombre: crear enlaza el `<link>`
+  y crea el fichero en el árbol. La hoja de estilos de la UI usa solo tokens del tema.
+- **Núcleo añadido**: `deleteNode` y `setNodeText` en `edit.ts`, `writeDeclaration`,
+  `stripAtRules` y `scopeCss` en `cssEdit.ts`, y categorías/etiquetas nuevas en la paleta.
+  `useDesigner` expone `selectedNode`, `canvasNodes`, `containerId`, `updateText`,
+  `setNodeAttr`, `setNodeStyle`, `nodeStyle`, `nodeBox` y `deleteNode`.
+- **Sincronización**: `Canvas ↔ Árbol ↔ Modelo ↔ HTML ↔ CSS`. `Aplicar cambios` vuelca el
+  lienzo a los búferes y guarda; sin hoja externa y con CSS generado, se materializa un único
+  `<style>` interno. Abrir/importar no modifica archivos.
+
+Decisiones de alcance (fuera de M2.2.1):
+
+- **Sin deshacer/rehacer, sin redimensionar por handles, sin responsive/breakpoints.** El
+  lienzo es desktop-first; los `@media` se conservan en el archivo pero no se previsualizan.
+- **Sin cascada resuelta ni editor CSS completo.** Se lee/escribe la regla propia del
+  elemento; `@import` no se sigue.
+- **Sin pruebas de interfaz.** Cobertura automática del núcleo puro; la UI se verifica
+  manualmente.
+
 ## Estado actual
 
 Funciona actualmente:
@@ -588,6 +669,32 @@ Funciona actualmente:
   detiene el análisis del resto.
 - Cada aviso de análisis indica su severidad y su `archivo:línea`; al pulsarlo se abre ese archivo
   en esa línea. El botón `Reanalizar` vuelve a recorrer el proyecto.
+- El workspace tiene modo `Diseño`: el botón `Diseño` de la cabecera cambia el lateral al panel
+  (paleta, selector de padre, árbol jerárquico) y el área principal al lienzo. En el lienzo se
+  seleccionan elementos con clic y se arrastran entre padres; en el árbol se suben y bajan con
+  los botones. El botón `Aplicar cambios` vuelca el lienzo a los búferes y guarda en disco.
+
+Comprobaciones realizadas al cerrar `M2.2.1`:
+
+- `npx tsc --noEmit` no informa de errores de tipos.
+- `npm test` ejecuta 300 pruebas del frontend con el runner integrado de Node, todas correctas.
+  Las 23 nuevas cubren `src/designer/visual.ts` (9: filtrado técnico, hijos del body, fragmentos,
+  textos vacíos, insignias Blade, lienzo vacío y etiquetas), `writeDeclaration`/`scopeCss`/
+  `stripAtRules` (8) y `deleteNode`/`setNodeText`/anti-ciclos (6).
+- Además se ejecutó una verificación funcional temporal de 12 comprobaciones (§32, pruebas 1–15
+  a nivel modelo/HTML/CSS: lienzo vacío, crear, padre/hijo, mover, re-parenting dentro y fuera,
+  jerarquía compuesta, clases estables, CSS externo/interno, importado fiel, Blade/JS intactos
+  y roundtrip), toda correcta. El script se borró tras ejecutarse.
+- `npm run build` (Vite) compila sin errores.
+
+Comprobaciones realizadas al cerrar `M2.2.0`:
+
+- `npx tsc --noEmit` no informa de errores de tipos.
+- `npm test` ejecuta 277 pruebas del frontend con el runner integrado de Node, todas correctas.
+  Las 9 nuevas cubren `src/designer/edit.ts` (insertar, mover entre padres, reordenar y rechazo
+  de mover un elemento a sí mismo) y `src/designer/attributes.ts` (añadir clase, sobrescribir y
+  añadir atributos, y no tocar etiquetas de contenido plano).
+- `npm run build` (Vite) compila sin errores.
 
 Comprobaciones realizadas al cerrar `M2.1.0`:
 
@@ -617,6 +724,27 @@ Limitaciones conocidas de `M2.1.0`:
   hoy obliga a editar `src/analysis/scan.ts`; no hay un campo en `Configuración`.
 - El análisis no se ha comprobado con la aplicación real: las 58 pruebas usan el runner de Node y
   el panel de análisis no tiene pruebas de interfaz.
+
+Limitaciones conocidas de `M2.2.1`:
+
+- El diseñador no deshace/rehace, no redimensiona por handles y no edita `@media`: esas
+  operaciones siguen haciéndose en el editor de código. Eliminar, texto, `id`, `class`,
+  posición, tamaño y estilos básicos sí están en el panel de propiedades.
+- El CSS externo se guarda en disco al pulsar `Aplicar cambios`, sin pasar por el estado
+  `Sin guardar` del búfer; el HTML sí pasa por el búfer y respeta `Guardar` / `Ctrl + S`.
+- El lienzo y el árbol no tienen pruebas automatizadas de interfaz; la cobertura automática es
+  del núcleo puro (`src/designer`). La UI se verifica manualmente.
+- Los estilos del `body` del autor no se aplican a la página del lienzo (solo las reglas de
+  clases, ids y etiquetas, con ámbito); los estilos en línea sí se previsualizan.
+
+Limitaciones conocidas de `M2.2.0`:
+
+- El diseñador no elimina nodos, no redimensiona, no deshace/rehace y no edita texto ni
+  atributos desde un inspector: esas operaciones siguen haciéndose en el editor de código.
+- El CSS externo se guarda en disco al pulsar `Aplicar cambios`, sin pasar por el estado
+  `Sin guardar` del búfer; el HTML sí pasa por el búfer y respeta `Guardar` / `Ctrl + S`.
+- El lienzo y el árbol no tienen pruebas automatizadas de interfaz; la cobertura automática es
+  del núcleo puro (`src/designer`).
 
 Comprobaciones realizadas al cerrar `M2.0.0`:
 
@@ -976,3 +1104,34 @@ Estos objetivos son únicamente los conocidos. No se ha definido ni implementado
 - `fixtures/demo-project` con un proyecto de ejemplo: HTML, dos plantillas Blade con componente,
   dos hojas de estilo, scripts y referencias externas y rotas.
 - 58 pruebas nuevas en `src/analysis` y 6 en Rust. Sin dependencias nuevas.
+
+#### M2.2.0 — Diseñador visual: lienzo, árbol y sincronización HTML/CSS
+
+- `src/designer/edit.ts` con `insertElement`, `reparentNode`/`applyMove`, `reorderNode`,
+  `ensureStylesheetLink` y `ensureStyleNode`, todo con `EditResult` atómico.
+- `src/hooks/useDesigner.ts` con carga del documento activo, detección del CSS objetivo,
+  operaciones de edición y `applyToBuffers`.
+- `src/components/workspace/design/` con `DesignCanvas`, `DesignTree`, `DesignPanel`,
+  `design.css` e `index.ts`.
+- `src/components/workspace/Workspace.tsx` con el conmutador `Código` / `Diseño` y el botón
+  `Aplicar cambios`.
+- `src/hooks/useWorkspace.ts` con `writeBuffer(path, content)` y `selectFile` reutilizando el
+  búfer existente.
+- 9 pruebas nuevas: `src/designer/edit.test.ts` (5) y `src/designer/attributes.test.ts` (4).
+  Sin dependencias nuevas.
+
+#### M2.2.1 — Reconstrucción del diseñador visual
+
+- `src/designer/visual.ts` nuevo: separación visual/técnico, hijos del body, insignias Blade.
+- `src/designer/cssEdit.ts` con `writeDeclaration`, `stripAtRules` y `scopeCss`.
+- `src/designer/edit.ts` con `deleteNode` y `setNodeText`; `canContain` corregido (permitir
+  subir a un antecesor) y `ensureStyleNode`/`ensureStylesheetLink` corregidos (`undefined`).
+- `src/designer/palette.ts` con categorías y etiquetas nuevas (`aside`, `h4`–`h6`, `select`,
+  `label`, `form`, `ul`, `ol`, `li`).
+- `src/hooks/useDesigner.ts` con `selectedNode`, `canvasNodes`, `containerId`, `updateText`,
+  `setNodeAttr`, `setNodeStyle`, `nodeStyle`, `nodeBox`, `deleteNode` y regla base en insertar.
+- `src/components/workspace/design/` reconstruido: `DesignCanvas` (zoom, página, CSS con
+  ámbito, imágenes con fallback, error boundary), `DesignTree` (colapsable, bidireccional),
+  `DesignPanel` (estructura + paleta), `PropertiesPanel` (nuevo), `design.css` e `index.ts`.
+- `src/components/workspace/Workspace.tsx` con layout de 3 columnas en modo Diseño.
+- 23 pruebas nuevas. Sin dependencias nuevas, sin cambios en Rust.

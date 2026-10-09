@@ -427,3 +427,127 @@ export function readDeclaration(text: string, selector: string, property: string
 export function hasRule(text: string, selector: string): boolean {
   return findSingleRule(text, selector) !== null;
 }
+
+/**
+ * Escribe una declaración cualquiera (`margin`, `color`, `display`, ...) para
+ * `selector`, creando la regla al final si no existe.
+ *
+ * Misma cirugía que `writeBox`: si el selector solo aparece en una lista
+ * compartida, se añade una regla propia en lugar de tocar la ajena.
+ */
+export function writeDeclaration(
+  text: string,
+  selector: string,
+  property: string,
+  value: string,
+): string {
+  const rule = findSingleRule(text, selector);
+
+  if (rule === null) {
+    return appendRule(text, selector, [[property.toLowerCase(), value]]);
+  }
+
+  const body = text.slice(rule.bodyStart, rule.bodyEnd);
+  const next = upsertDeclaration(body, property.toLowerCase(), value);
+  return `${text.slice(0, rule.bodyStart)}${next}${text.slice(rule.bodyEnd)}`;
+}
+
+/**
+ * Quita los bloques `@...` de un texto CSS (`@media`, `@import`, `@font-face`).
+ *
+ * El lienzo es desktop-first: lo responsive queda para otro módulo. Además, una
+ * regla dentro de un `@media` no se puede reescribir con el mismo prefijo que
+ * las de nivel superior, así que para previsualizar se ignoran en lugar de
+ * aplicarlas a medias.
+ */
+export function stripAtRules(text: string): string {
+  let out = "";
+  let cursor = 0;
+  let index = 0;
+  let depth = 0;
+
+  const flush = (end: number): void => {
+    out += text.slice(cursor, end);
+    cursor = end;
+  };
+
+  while (index < text.length) {
+    const char = text[index];
+
+    if (char === "/" && text[index + 1] === "*") {
+      index = skipComment(text, index);
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      index = skipString(text, index);
+      continue;
+    }
+
+    if (depth === 0 && char === "@" && /[a-zA-Z]/.test(text[index + 1] ?? "")) {
+      flush(index);
+      const semicolon = text.indexOf(";", index);
+      const brace = text.indexOf("{", index);
+
+      if (brace >= 0 && (semicolon < 0 || brace < semicolon)) {
+        const close = matchBrace(text, brace);
+        index = close < 0 ? text.length : close + 1;
+      } else if (semicolon >= 0) {
+        index = semicolon + 1;
+      } else {
+        index = text.length;
+      }
+
+      cursor = index;
+      continue;
+    }
+
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth = Math.max(0, depth - 1);
+    }
+
+    index += 1;
+  }
+
+  flush(text.length);
+  return out;
+}
+
+/** Prefija cada selector de una lista con el ámbito (`body`/`html` se absorben). */
+function scopeSelectorList(selector: string, scope: string): string {
+  return selector
+    .split(",")
+    .map((part) => {
+      const trimmed = part
+        .trim()
+        .replace(/^(?:(?:html|body)(?![\w-])\s*)+/i, "")
+        .trim();
+      return trimmed === "" ? scope : `${scope} ${trimmed}`;
+    })
+    .join(", ");
+}
+
+/**
+ * Reescribe las reglas de nivel superior para que solo afecten a `scope`.
+ *
+ * El lienzo inyecta la hoja del autor tal cual en la página: sin este prefijo,
+ * un `button { ... }` del proyecto pintaría también los botones de Prisma.
+ * Los bloques `@...` se eliminan antes (ver `stripAtRules`).
+ */
+export function scopeCss(text: string, scope: string): string {
+  const clean = stripAtRules(text);
+  const rules = scanRules(clean);
+  let out = "";
+  let cursor = 0;
+
+  for (const rule of rules) {
+    out += clean.slice(cursor, rule.start);
+    out += scopeSelectorList(rule.selector, scope);
+    out += ` ${clean.slice(rule.bodyStart - 1, rule.end)}`;
+    cursor = rule.end;
+  }
+
+  return out + clean.slice(cursor);
+}

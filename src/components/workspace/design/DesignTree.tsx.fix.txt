@@ -1,0 +1,10 @@
+﻿        <select value={parentId ?? ""} onChange={(e) => setParentId(e.target.value === "" ? null : (e.target.value as PrismaId))}>
+          <option value="">Raíz</option>
+          {flat
+            .filter((n) => n.kind === "element")
+            .map((n) => (
+              <option key={n.id} value={n.id}>
+                {<>}
+              </option>
+            ))}
+        </select>

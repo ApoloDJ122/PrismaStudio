@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { ensurePositionRelative, hasRule, readBox, readDeclaration, writeBox } from "./cssEdit.ts";
+import { ensurePositionRelative, hasRule, readBox, readDeclaration, scopeCss, stripAtRules, writeBox, writeDeclaration } from "./cssEdit.ts";
 
 const { deepEqual, equal, ok } = assert;
 
@@ -148,5 +148,72 @@ describe("M2.2.0 ediciones de texto CSS", () => {
 
     ok(css.includes('background: url("https://x/y.png");'));
     deepEqual(readBox(css, ".a"), { x: 3, y: 4 });
+  });
+});
+
+describe("M2.2.1 declaración genérica de CSS", () => {
+  it("crea la regla cuando no existe", () => {
+    const css = writeDeclaration("", ".div-1", "display", "flex");
+
+    ok(css.includes(".div-1 {"));
+    equal(readDeclaration(css, ".div-1", "display"), "flex");
+  });
+
+  it("actualiza sin tocar las demás declaraciones", () => {
+    const base = ".a { color: red; margin: 0; }";
+    const css = writeDeclaration(base, ".a", "color", "blue");
+
+    equal(readDeclaration(css, ".a", "color"), "blue");
+    equal(readDeclaration(css, ".a", "margin"), "0");
+    equal(count(css, ".a {"), 1);
+  });
+
+  it("no toca una regla compartida: añade una propia", () => {
+    const base = ".a, .b { color: red; }";
+    const css = writeDeclaration(base, ".a", "color", "blue");
+
+    ok(css.includes(".a, .b { color: red; }"));
+    equal(readDeclaration(css, ".a", "color"), "blue");
+  });
+});
+
+describe("M2.2.1 ámbito del CSS en el lienzo", () => {
+  it("prefija los selectores con el ámbito del lienzo", () => {
+    const css = scopeCss(".card { color: red; }\nbutton { margin: 0; }", ".ds-page");
+
+    ok(css.includes(".ds-page .card {"));
+    ok(css.includes(".ds-page button {"));
+    ok(!css.includes("\nbutton {"));
+  });
+
+  it("absorbe body y html en el ámbito", () => {
+    const css = scopeCss("body { color: red; }\nhtml body .x { margin: 0; }", ".ds-page");
+
+    ok(css.includes(".ds-page {"));
+    ok(css.includes(".ds-page .x {"));
+  });
+
+  it("reparte las listas de selectores", () => {
+    const css = scopeCss(".a, .b { color: red; }", ".ds-page");
+
+    ok(css.includes(".ds-page .a, .ds-page .b {"));
+  });
+
+  it("elimina los bloques @ sin tocar el resto", () => {
+    const base = ".a { color: red; }\n@media (max-width: 600px) {\n  .a { color: blue; }\n}\n.b { margin: 0; }";
+    const stripped = stripAtRules(base);
+
+    ok(stripped.includes(".a { color: red; }"));
+    ok(stripped.includes(".b { margin: 0; }"));
+    ok(!stripped.includes("@media"));
+    ok(!stripped.includes("color: blue"));
+  });
+
+  it("scopeCss no deja rastro de @media", () => {
+    const base = ".a { color: red; }\n@media x {\n .a { color: blue; }\n}";
+    const css = scopeCss(base, ".ds-page");
+
+    ok(!css.includes("@media"));
+    ok(css.includes(".ds-page .a {"));
   });
 });

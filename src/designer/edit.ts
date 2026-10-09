@@ -3,6 +3,7 @@ import { isContainerTag } from "./html.ts";
 import {
   appendChild,
   createElement,
+  createText,
   detach,
   findById,
   flatten,
@@ -64,7 +65,13 @@ export function isDescendantOf(node: PrismaNode, ancestorId: PrismaId): boolean 
   return node.children.some((child) => isDescendantOf(child, ancestorId));
 }
 
-/** `true` si otro nodo puede alojar a `node` sin crear un ciclo. */
+/**
+ * `true` si otro nodo puede alojar a `node` sin crear un ciclo.
+ *
+ * Solo se rechaza meter un elemento dentro de sí mismo o dentro de su propio
+ * descendiente. Subirlo a un antecesor (sacar un botón de su DIV al `body`)
+ * es legal: primero se despega de su sitio actual.
+ */
 export function canContain(parent: PrismaNode, node: PrismaNode): boolean {
   if (parent.kind !== "element" || parent.tag === null) {
     return false;
@@ -74,7 +81,11 @@ export function canContain(parent: PrismaNode, node: PrismaNode): boolean {
     return false;
   }
 
-  return !isDescendantOf(parent, node.id);
+  if (parent.id === node.id) {
+    return false;
+  }
+
+  return !isDescendantOf(node, parent.id);
 }
 
 /** Todas las hojas CSS enlazadas, en orden de lectura. */
@@ -303,7 +314,7 @@ export function ensureStylesheetLink(
             .split(/\s+/)
             .includes("stylesheet"),
       ),
-  );
+  ) ?? null;
 
   if (existing !== null) {
     return okay(existing);
@@ -331,7 +342,7 @@ export function ensureStylesheetLink(
 
   const head = flatten(roots).find((node) => node.kind === "element" && node.tag === "head");
 
-  if (head !== null) {
+  if (head !== undefined) {
     appendChild(head, link);
     return okay(link);
   }
@@ -377,7 +388,7 @@ export function ensureStyleNode(
 
   const head = flatten(roots).find((node) => node.kind === "element" && node.tag === "head");
 
-  if (head !== null) {
+  if (head !== undefined) {
     appendChild(head, style);
   } else {
     roots.splice(0, 0, style);
@@ -484,4 +495,73 @@ export function setNodeAttribute(roots: PrismaNode[], nodeId: PrismaId, name: st
   }
 
   return setAttribute(node, name, value) ? { ok: true } : { ok: false, message: "Este nodo no admite ese atributo." };
+}
+
+/**
+ * Elimina un elemento del documento, con todo lo que contiene.
+ *
+ * La estructura del documento (`html`, `head`, `body`) no se puede borrar:
+ * sin ella no hay página que dibujar. Todo lo demás sale con `detach`, así que
+ * el HTML serializado deja de contenerlo de inmediato.
+ */
+export function deleteNode(roots: PrismaNode[], nodeId: PrismaId): SimpleResult {
+  const node = findById(roots, nodeId);
+
+  if (node === null) {
+    return { ok: false, message: "El elemento ya no está en el documento." };
+  }
+
+  if (
+    node.kind === "element" &&
+    (node.tag === "html" || node.tag === "head" || node.tag === "body")
+  ) {
+    return { ok: false, message: "La estructura del documento no se puede eliminar." };
+  }
+
+  return detach(roots, node)
+    ? { ok: true }
+    : { ok: false, message: "El elemento no se pudo eliminar." };
+}
+
+/**
+ * Cambia el texto interior de un elemento simple (`<h1>Título</h1>`).
+ *
+ * Solo vale para elementos que contienen texto y nada más: si dentro hay otros
+ * elementos o contenido Blade, se rechaza en lugar de destruirlo. El texto vacío
+ * deja el elemento sin hijos (`<button></button>`).
+ */
+export function setNodeText(
+  roots: PrismaNode[],
+  factory: IdFactory,
+  nodeId: PrismaId,
+  text: string,
+): SimpleResult {
+  const node = findById(roots, nodeId);
+
+  if (node === null) {
+    return { ok: false, message: "El elemento ya no está en el documento." };
+  }
+
+  if (node.kind !== "element" || node.tag === null) {
+    return { ok: false, message: "Solo se puede editar el texto de un elemento." };
+  }
+
+  const nested = node.children.some(
+    (child) =>
+      child.kind !== "text" && child.kind !== "comment",
+  );
+
+  if (nested) {
+    return { ok: false, message: "Este elemento tiene contenido anidado: edítalo en Código." };
+  }
+
+  if (text === "") {
+    node.children = [];
+    return { ok: true };
+  }
+
+  const replacement = createText(factory, text);
+  replacement.parentId = node.id;
+  node.children = [replacement];
+  return { ok: true };
 }

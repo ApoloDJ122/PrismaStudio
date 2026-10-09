@@ -33,8 +33,8 @@ describe("M2.2.0 clases de diseñador", () => {
     const [first, second] = document[0]?.children ?? [];
 
     ok(first !== undefined && second !== undefined);
-    equal(ensureDesignClass(document, first), "div-1");
-    equal(ensureDesignClass(document, second), "div-2");
+    equal(ensureDesignClass(document, first!), "div-1");
+    equal(ensureDesignClass(document, second!), "div-2");
   });
 
   it("no pisa una clase automatica que ya exista en el documento", () => {
@@ -43,7 +43,7 @@ describe("M2.2.0 clases de diseñador", () => {
 
     ok(withClass !== undefined && empty !== undefined);
     equal(nextClassName(document, "div"), "div-1");
-    equal(ensureDesignClass(document, empty), "div-1");
+    equal(ensureDesignClass(document, empty!), "div-1");
     equal(nextClassName(document, "div"), "div-3");
   });
 
@@ -52,9 +52,9 @@ describe("M2.2.0 clases de diseñador", () => {
     const button = document[0];
 
     ok(button !== undefined);
-    equal(designClassOf(document, button), "btn-primary");
-    equal(ensureDesignClass(document, button), "btn-primary");
-    deepClassList(button, ["btn-primary"]);
+    equal(designClassOf(document, button!), "btn-primary");
+    equal(ensureDesignClass(document, button!), "btn-primary");
+    deepClassList(button!, ["btn-primary"]);
     equal(serialize(document), '<button class="btn-primary">Enviar</button>');
   });
 
@@ -63,9 +63,9 @@ describe("M2.2.0 clases de diseñador", () => {
     const card = document[0];
 
     ok(card !== undefined);
-    equal(designClassOf(document, card), null);
-    equal(ensureDesignClass(document, card), "div-1");
-    deepClassList(card, ["card", "div-1"]);
+    equal(designClassOf(document, card!), null);
+    equal(ensureDesignClass(document, card!), "div-1");
+    deepClassList(card!, ["card", "div-1"]);
     ok(serialize(document).includes('class="card div-1"'));
   });
 
@@ -74,9 +74,9 @@ describe("M2.2.0 clases de diseñador", () => {
     const paragraph = document[0];
 
     ok(paragraph !== undefined);
-    ensureDesignClass(document, paragraph);
+    ensureDesignClass(document, paragraph!);
     const afterFirst = serialize(document);
-    equal(ensureDesignClass(document, paragraph), "p-1");
+    equal(ensureDesignClass(document, paragraph!), "p-1");
     equal(serialize(document), afterFirst);
   });
 
@@ -94,9 +94,9 @@ describe("M2.2.0 clases de diseñador", () => {
     const element = document[0];
 
     ok(element !== undefined);
-    ok(setAttribute(element, "class", "nueva"));
+    ok(setAttribute(element!, "class", "nueva"));
     ok(serialize(document).startsWith('<DIV CLASS="nueva" TITLE="t">'));
-    deepClassList(element, ["nueva"]);
+    deepClassList(element!, ["nueva"]);
   });
 
   it("anade un atributo nuevo sin romper uno con > dentro del valor", () => {
@@ -104,7 +104,7 @@ describe("M2.2.0 clases de diseñador", () => {
     const element = document[0];
 
     ok(element !== undefined);
-    ok(appendClassName(element, "div-1"));
+    ok(appendClassName(element!, "div-1"));
     equal(serialize(document), '<div title="a > b" class="div-1">x</div>');
   });
 
@@ -113,7 +113,7 @@ describe("M2.2.0 clases de diseñador", () => {
     const style = document[0];
 
     ok(style !== undefined);
-    equal(setAttribute(style, "class", "x"), false);
+    equal(setAttribute(style!, "class", "x"), false);
     equal(serialize(document), "<style>.a { color: red; }</style>");
   });
 
@@ -124,7 +124,7 @@ describe("M2.2.0 clases de diseñador", () => {
     const div = findByTag(document, "div")[0];
 
     ok(div !== undefined);
-    equal(ensureDesignClass(document, div), "div-1");
+    equal(ensureDesignClass(document, div!), "div-1");
     ok(serialize(document).includes('id="main" class="div-1"'));
   });
 });

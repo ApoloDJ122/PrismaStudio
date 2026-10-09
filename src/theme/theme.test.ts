@@ -228,6 +228,7 @@ describe("tokens de los estilos", () => {
     "../components/SettingsScreen.css",
     "../components/workspace/Workspace.css",
     "../components/workspace/AnalysisPanel.css",
+    "../components/workspace/design/design.css",
   ] as const;
 
   /** Tokens de la interfaz que los componentes necesitan, por zona. */

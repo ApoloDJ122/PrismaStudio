@@ -128,6 +128,16 @@ export function useWorkspace(projectState: ProjectState) {
         return;
       }
 
+      const existingBuffer = buffersRef.current[path];
+      if (existingBuffer !== undefined) {
+        const tab: OpenTab = { path, name: existingBuffer.name, language: existingBuffer.language };
+        const tabsNow = tabsRef.current;
+        const next = [...tabsNow, tab];
+        writeTabs(next);
+        writeIndex(next.length - 1);
+        return;
+      }
+
       setIsLoadingFile(true);
 
       try {
@@ -673,6 +683,29 @@ export function useWorkspace(projectState: ProjectState) {
     return () => clearTimeout(timer);
   }, [query, project, reportError]);
 
+  const writeBuffer = useCallback(
+    (path: string, content: string, options?: { name?: string; language?: string }) => {
+      setBuffers((current) => {
+        const existing = current[path];
+        if (existing === undefined) {
+          return current;
+        }
+        const next = {
+          ...current,
+          [path]: {
+            ...existing,
+            content,
+            ...(options?.name !== undefined ? { name: options.name } : {}),
+            ...(options?.language !== undefined ? { language: options.language } : {}),
+          },
+        };
+        buffersRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
+
   return {
     buffers,
     openTabs,
@@ -709,6 +742,7 @@ export function useWorkspace(projectState: ProjectState) {
     closeTab,
     isTabDirty,
     resetWorkspace,
+    writeBuffer,
   };
 }
 
